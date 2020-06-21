@@ -13,6 +13,9 @@ gc()
 options(digits = 3)
 set.seed(1989)
 
+## SET THIS CAREFULLY
+nThreads <- 16
+
 # Read data
 real.news <- fread(file.path('./data', 'True.csv'))
 real.news[, is_fake := FALSE]
@@ -165,7 +168,7 @@ remove(afinn, nrc, vad)
 library(randomForest)
 library(RRF)
 
-cl <- makeSOCKcluster(4)
+cl <- makeSOCKcluster(nThreads)
 registerDoSNOW(cl)
 
 # RF AFINN
