@@ -15,8 +15,8 @@ gc()
 options(digits = 3)
 set.seed(1989)
 
-## SET THIS CAREFULLY - install parallel
-nThreads <- min(ceiling(parallel::detectCores()/2), 16)
+## SET THIS CAREFULLY
+nThreads <- 16
 
 # Read data
 real.news <- fread(file.path('./data', 'True.csv'))
