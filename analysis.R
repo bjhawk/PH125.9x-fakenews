@@ -198,11 +198,108 @@ vad.rf.model <- train(
 )
 vad.rf.model.timer <- proc.time() - vad.rf.model.timer
 
+## Radial KSVMs
+##
+# We defualt to C= 1
+# as the max penalty for large residuals, since our dataset is relatively small
+
+# because we will be leveraging matrix-based function signatures,
+# this (highly customized) helper function will create a matrix
+# of all predictors from a given data.table
+makePredictors <- function(dt) {
+  # drop the response column
+  dt$is_fake = NULL
+
+  # convert this bool factor into a -1/1 integer col
+  is_cap_title = ifelse(dt$is_cap_title == TRUE, 1, -1)
+  dt$is_cap_title = NULL
+
+  # bind all the data together for return as a matrix
+  cbind(
+    is_cap_title = is_cap_title,
+    as.matrix(dt)
+  )
+}
+
+ksvm.trainControl <- trainControl(
+  method = "cv",
+  number = 5,
+  allowParallel = TRUE
+)
+
+# KSVM AFINN
+afinn.ksvm.model.timer <- proc.time()
+afinn.training.predictors <- makePredictors(afinn.training)
+
+afinn.training.sigmas <- sigest(afinn.training.predictors, frac = 1)
+afinn.training.sigmas <- seq(
+  afinn.training.sigmas["90%"] * 0.75,
+  afinn.training.sigmas["10%"] * 1.25,
+  length.out = 10
+)
+
+afinn.ksvm.model <- train(
+  afinn.training.predictors,
+  afinn.training$is_fake,
+  method = 'svmRadial',
+  trControl = ksvm.trainControl,
+  tuneGrid = data.table(
+    sigma = afinn.training.sigmas,
+    C = 1
+  )
+)
+afinn.ksvm.model.timer <- proc.time() - afinn.ksvm.model.timer
+
+# KSVM NRC
+nrc.ksvm.model.timer <- proc.time()
+nrc.training.predictors <- makePredictors(nrc.training)
+
+nrc.training.sigmas <- sigest(nrc.training.predictors, frac = 1)
+nrc.training.sigmas <- seq(
+  nrc.training.sigmas["90%"] * 0.75,
+  nrc.training.sigmas["10%"] * 1.25,
+  length.out = 10
+)
+
+nrc.ksvm.model <- train(
+  nrc.training.predictors,
+  nrc.training$is_fake,
+  method = 'svmRadial',
+  trControl = ksvm.trainControl,
+  tuneGrid = data.table(
+    sigma = nrc.training.sigmas,
+    C = 1
+  )
+)
+nrc.ksvm.model.timer <- proc.time() - nrc.ksvm.model.timer
+
+# KSVM VAD
+vad.ksvm.model.timer <- proc.time()
+vad.training.predictors <- makePredictors(vad.training)
+
+vad.training.sigmas <- sigest(vad.training.predictors, frac = 1)
+vad.training.sigmas <- seq(
+  vad.training.sigmas["90%"] * 0.75,
+  vad.training.sigmas["10%"] * 1.25,
+  length.out = 10
+)
+
+vad.ksvm.model <- train(
+  vad.training.predictors,
+  vad.training$is_fake,
+  method = 'svmRadial',
+  trControl = ksvm.trainControl,
+  tuneGrid = data.table(
+    sigma = vad.training.sigmas,
+    C = 1
+  )
+)
+vad.ksvm.model.timer <- proc.time() - vad.ksvm.model.timer
+
+## Stop and deregister parallel computing
 stopCluster(cl)
 registerDoSEQ()
 remove(cl)
 
-## Radial KSVMs
-# KSVM AFINN
-# KSVM NRC
-# KSVM VAD
+
+## Make final predictions/measure Acc
