@@ -15,8 +15,8 @@ gc()
 options(digits = 3)
 set.seed(1989)
 
-## SET THIS CAREFULLY
-nThreads <- 16
+## SET THIS CAREFULLY - install parallel
+nThreads <- min(ceiling(parallel::detectCores()/2), 16)
 
 # Read data
 real.news <- fread(file.path('./data', 'True.csv'))
@@ -162,7 +162,7 @@ vad <- split(vad, by = "set", keep.by = FALSE)
 vad.training <- vad$training
 vad.testing <- vad$testing
 
-remove(afinn, nrc, vad)
+remove(tokenized, afinn, nrc, vad)
 
 
 ## Begin building models
