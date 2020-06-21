@@ -8,6 +8,8 @@ library(stringr)
 library(kernlab)
 library(doSNOW)
 
+## e1071, randomForest, foreach, import
+
 remove(list = ls())
 gc()
 options(digits = 3)
@@ -165,8 +167,6 @@ remove(afinn, nrc, vad)
 
 ## Begin building models
 ## Random Forests
-library(randomForest)
-library(RRF)
 
 cl <- makeSOCKcluster(nThreads)
 registerDoSNOW(cl)
@@ -176,27 +176,27 @@ afinn.rf.model.timer <- proc.time()
 afinn.rf.model <- train(
   is_fake ~ .,
   data = afinn.training,
-  method = "RRF"
+  method = "parRF"
 )
-timer <- proc.time() - afinn.rf.model.timer
+afinn.rf.model.timer <- proc.time() - afinn.rf.model.timer
 
 # RF NRC
 nrc.rf.model.timer <- proc.time()
 nrc.rf.model <- train(
   is_fake ~ .,
   data = nrc.training,
-  method = "RRF"
+  method = "parRF"
 )
-timer <- proc.time() - nrc.rf.model.timer
+nrc.rf.model.timer <- proc.time() - nrc.rf.model.timer
 
 # RF VAD
 vad.rf.model.timer <- proc.time()
 vad.rf.model <- train(
   is_fake ~ .,
   data = vad.training,
-  method = "RRF"
+  method = "parRF"
 )
-timer <- proc.time() - vad.rf.model.timer
+vad.rf.model.timer <- proc.time() - vad.rf.model.timer
 
 stopCluster(cl)
 registerDoSEQ()
