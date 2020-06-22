@@ -111,7 +111,7 @@ setnames(afinn, c("token", "sentiment"))
 setkey(afinn, token)
 setkey(tokenized, token)
 
-# data.table syntax for doing an inner join
+# data.table syntax for doing an inner join on keyed data.tables
 afinn <- afinn[tokenized, nomatch = NULL]
 
 # aggregate total sentiment for each article
@@ -135,7 +135,7 @@ setnames(nrc, "word", "token")
 setkey(nrc, token)
 setkey(tokenized, token)
 
-# data.table syntax for doing an inner join
+# data.table syntax for doing an inner join on keyed data.tables
 nrc <- nrc[tokenized, nomatch = NULL]
 
 # Tibbles with pivot_wider is a much easier-to-read approach here,
@@ -167,7 +167,7 @@ setnames(vad, "word", "token")
 setkey(vad, token)
 setkey(tokenized, token)
 
-# data.table syntax for an inner join
+# data.table syntax for an inner join on keyed data.tables
 vad <- vad[tokenized, nomatch = NULL]
 
 # Aggregate dimensions by summing across articles

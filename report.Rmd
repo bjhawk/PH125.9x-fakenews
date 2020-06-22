@@ -334,12 +334,14 @@ The Affin lexicon provides an integer column, and can simply be summed.
 afinn <- fread("./data/afinn.csv")
 
 # Change names of columns for joining
-# using as_tibble > inner join > as.data.table due to discrepencies
-# in how joins are implemented in the data.table dtplyr backend
 setnames(afinn, c("token", "sentiment"))
-afinn <- as_tibble(tokenized) %>%
-  inner_join(afinn, by = "token") %>%
-  as.data.table()
+
+# setting data.table keys make joins a lot faster
+setkey(afinn, token)
+setkey(tokenized, token)
+
+# data.table syntax for doing an inner join on keyed data.tables
+afinn <- afinn[tokenized, nomatch = NULL]
 
 # aggregate total sentiment for each article
 afinn <- afinn[
@@ -354,17 +356,19 @@ The NRC lexicon is far more work to aggregate. First, we join the tokens to the 
 ```{r join_nrc_lexicon}
 nrc <- fread("./data/nrc.csv")
 
+# Change column names for joining
 setnames(nrc, "word", "token")
+
+# Set keys for data.table join
 setkey(nrc, token)
 setkey(tokenized, token)
 
-nrc <- as_tibble(tokenized) %>%
-  inner_join(nrc, by = "token") %>%
-  as.data.table()
+# data.table syntax for doing an inner join on keyed data.tables
+nrc <- nrc[tokenized, nomatch = NULL]
 
-# Tibbles with pivot_wider is a much easier-to-read approach here.
+# Tibbles with pivot_wider is a much easier-to-read approach here,
 # but there are other more performant ways of doing this if our
-# dataset was very large.
+# dataset was very large. See `reshape2` package
 nrc <- as_tibble(nrc) %>%
   pivot_wider(
     names_from = sentiment,
@@ -400,12 +404,10 @@ setnames(vad, "word", "token")
 setkey(vad, token)
 setkey(tokenized, token)
 
-# Join VAD data to tokens
-vad <- as_tibble(tokenized) %>%
-  inner_join(vad, by = "token") %>%
-  as.data.table()
+# data.table syntax for an inner join on keyed data.tables
+vad <- vad[tokenized, nomatch = NULL]
 
-# Sum VAD dimensions
+# Aggregate dimensions by summing across articles
 vad <- vad[
   ,
   list(
@@ -517,13 +519,8 @@ confusionMatrix(fitted(vad.rf.model), vad.training$is_fake)
 
 #### Support Vector Machines
 
-> explain what an svm is and what it does
+In essence, Support Vector Machines allow a model to mathematically draw boundaries around groups of data within higher-order planes.
 
-> demonstrate on dummy data
-
-> make models
-
-> test models on training sets
 
 ```{r, test_svm_models_training}
 # Afinn SVM
