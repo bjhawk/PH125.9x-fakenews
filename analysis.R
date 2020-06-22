@@ -8,10 +8,9 @@ library(stringr)
 library(kernlab)
 library(doSNOW)
 
+## TODO what libs need to be required/installed?
 ## e1071, randomForest, foreach, import
 
-remove(list = ls())
-gc()
 options(digits = 3)
 set.seed(1989)
 
@@ -28,8 +27,14 @@ fake.news[, is_fake := TRUE]
 all.news <- rbind(real.news, fake.news)
 
 remove(real.news, fake.news)
-message("Cleaning Dataset, this takes a few moments (iconv + grep)")
+
 # Clean and tidy dataset
+# + Fix character encoding, trim whitespace
+# + Remove observations without a title
+# + Create a "full_text" column
+# + Make outcome column a factor
+# + Add a column counting the number of capitalized words in the title
+message("Cleaning Dataset, this takes a few moments (iconv + grep)")
 all.news <- lazy_dt(all.news) %>%
   mutate(
     title = str_trim(iconv(title, from = "utf8", to = "latin1")),
@@ -58,9 +63,10 @@ all.news[train.index, set := "training"]
 remove(train.index)
 
 message("Splitting tokens")
-# This takes a few moments
 timer <- proc.time()
+
 # split tokens for joining sentiment, remove stop words.
+# This takes a few moments
 tokenized <- all.news %>%
   unnest_tokens(token, full_text) %>%
   lazy_dt() %>%
@@ -70,22 +76,25 @@ message("Tokens split in ", timer - proc.time(), " seconds.")
 
 remove(all.news)
 
+# Introduce lexicons and join to token data
+# Note that inner joins will inherently filter out tokens
+# not present in the given lexicon
 message("joining dataset to sentiments")
 
-## Note that inner joins will inherently filter out tokens
-## not present in the given lexicon
-
+# First the Afinn lexicon
 message(". . . Afinn")
 timer <- proc.time()
 afinn <- fread("./data/afinn.csv")
 
 # Change names of columns for joining
-# using as_tibble > inner join > as.data.table due to discrepencies
-# in how joins are implemented in the data.table dtplyr backend
 setnames(afinn, c("token", "sentiment"))
-afinn <- as_tibble(tokenized) %>%
-  inner_join(afinn, by = "token") %>%
-  as.data.table()
+
+# setting data.table keys make joins a lot faster
+setkey(afinn, token)
+setkey(tokenized, token)
+
+# data.table syntax for doing an inner join
+afinn <- afinn[tokenized, nomatch = NULL]
 
 # aggregate total sentiment for each article
 afinn <- afinn[
@@ -96,21 +105,24 @@ afinn <- afinn[
 
 message("Afinn sentiment aggregated in ", timer - proc.time(), " seconds.")
 
+# Join tokens to the NRC lexicon
 message(". . . NRC")
 timer <- proc.time()
 nrc <- fread("./data/nrc.csv")
 
+# Change column names for joining
 setnames(nrc, "word", "token")
+
+# Set keys for data.table join
 setkey(nrc, token)
 setkey(tokenized, token)
 
-nrc <- as_tibble(tokenized) %>%
-  inner_join(nrc, by = "token") %>%
-  as.data.table()
+# data.table syntax for doing an inner join
+nrc <- nrc[tokenized, nomatch = NULL]
 
-# Tibbles with pivot_wider is a much easier-to-read approach here.
+# Tibbles with pivot_wider is a much easier-to-read approach here,
 # but there are other more performant ways of doing this if our
-# dataset was very large.
+# dataset was very large. See `reshape2` package
 nrc <- as_tibble(nrc) %>%
   pivot_wider(
     names_from = sentiment,
@@ -124,19 +136,23 @@ nrc <- as_tibble(nrc) %>%
 
 message("NRC sentiment aggregated in ", timer - proc.time(), " seconds.")
 
+# Introduce the NRC VAD lexicon
 message(". . . NRC VAD")
 timer <- proc.time()
 vad <- fread("./data/nrc_vad.csv")
+
+# Change column names for joins
 setnames(vad, tolower(names(vad)))
 setnames(vad, "word", "token")
 
+# set key for data.table join
 setkey(vad, token)
 setkey(tokenized, token)
-vad <- as_tibble(tokenized) %>%
-  inner_join(vad, by = "token") %>%
-  as.data.table()
 
-# roll up - sum V/A/D
+# data.table syntax for an inner join
+vad <- vad[tokenized, nomatch = NULL]
+
+# Aggregate dimensions by summing across articles
 vad <- vad[
   ,
   list(
@@ -148,7 +164,7 @@ vad <- vad[
 ]
 message("NRC sentiment aggregated in ", timer - proc.time(), " seconds.")
 
-## Splitting test and training sets
+## Splitting test and training sets for each of the lexicons
 afinn <- split(afinn, by = "set", keep.by = FALSE)
 afinn.training <- afinn$training
 afinn.testing <- afinn$testing
@@ -161,6 +177,7 @@ vad <- split(vad, by = "set", keep.by = FALSE)
 vad.training <- vad$training
 vad.testing <- vad$testing
 
+# clean up
 remove(tokenized, afinn, nrc, vad)
 
 ## Begin building models
@@ -174,20 +191,24 @@ makePredictors <- function(dt) {
   # drop the response column
   dt$is_fake = NULL
 
+  # return the rest of the columns as a matrix
   as.matrix(dt)
 }
 
 ## Random Forests
+# Initialize and register parallel threads
 cl <- makeSOCKcluster(nThreads)
 registerDoSNOW(cl)
 
+# Create a standard trainControl for all the RF models
+# using 5-fold cross-validation in parallel
 rf.trainControl <- trainControl(
   method = "cv",
   number = 5,
   allowParallel = TRUE
 )
 
-# RF AFINN
+# Random Forest model using the Afinn sentiment
 message("RF Afinn")
 timer <- proc.time()
 afinn.rf.model <- train(
@@ -198,7 +219,11 @@ afinn.rf.model <- train(
 )
 message("Afinn Random Forest built in ", timer - proc.time(), " seconds.")
 
-# RF NRC
+# Accuracy measures against training dataset
+confusionMatrix(fitted(afinn.rf.model), afinn.training$is_fake)
+# 82.3%
+
+# Random Forest model using the NRC sentiments
 message("RF NRC")
 timer <- proc.time()
 nrc.rf.model <- train(
@@ -209,7 +234,11 @@ nrc.rf.model <- train(
 )
 message("NRC Random Forest built in ", timer - proc.time(), " seconds.")
 
-# RF VAD
+# Accuracy measures against training dataset
+confusionMatrix(fitted(nrc.rf.model), nrc.training$is_fake)
+# 99.8%
+
+# Random Forest model using the NRC VAD dimensions
 message("RF NRC VAD")
 timer <- proc.time()
 vad.rf.model <- train(
@@ -220,22 +249,34 @@ vad.rf.model <- train(
 )
 message("NRC VAD Random Forest built in ", timer - proc.time(), " seconds.")
 
+# Accuracy measures against training dataset
+confusionMatrix(fitted(vad.rf.model), vad.training$is_fake)
+# 99.8%
+
 ## Radial KSVMs
-
-# We defualt to C = 1
-# as the max penalty for large residuals, since our dataset is relatively small
-
+# create a matching trainControl for our KSVM models
 ksvm.trainControl <- trainControl(
   method = "cv",
   number = 5,
   allowParallel = TRUE
 )
 
-# KSVM AFINN
+# KSVM model using the Afinn sentiment
 message("KSVM Afinn")
 timer <- proc.time()
+
+# Create the matrix of predictors
 afinn.training.predictors <- makePredictors(afinn.training)
 
+# These KSVM Models are trained against a set of tuning parameters `sigma`, 
+# which effectively controls how linear or flexible the decision boundary
+# becomes, and `C`, a measure of cost used to penalize large residuals after 
+# normalization. Since our dataset is small, no tested values for C < 1 had
+# a positive effect, so for the sake of brevity it is defaulting to 1.
+
+# Here, and below, sigmas are going to come from an estimation function provided
+# in the `kernlab` package. The range of these will be expanded by 25% so that
+# we can try a broader set of values for sigma.
 afinn.training.sigmas <- sigest(afinn.training.predictors, frac = 1)
 afinn.training.sigmas <- seq(
   afinn.training.sigmas["90%"] * 0.75,
@@ -243,6 +284,7 @@ afinn.training.sigmas <- seq(
   length.out = 10
 )
 
+# train the model
 afinn.ksvm.model <- train(
   afinn.training.predictors,
   afinn.training$is_fake,
@@ -255,11 +297,18 @@ afinn.ksvm.model <- train(
 )
 message("Afinn SVM model built in ", timer - proc.time(), " seconds.")
 
-# KSVM NRC
+# Accuracy measures against training dataset
+confusionMatrix(fitted(afinn.ksvm.model$finalModel), afinn.training$is_fake)
+# 82%
+
+# KSVM model using the NRC sentiments
 message("KSVM NRC")
 timer <- proc.time()
+
+# Create the matrix of predictors
 nrc.training.predictors <- makePredictors(nrc.training)
 
+# Create set of values for tuning sigma
 nrc.training.sigmas <- sigest(nrc.training.predictors, frac = 1)
 nrc.training.sigmas <- seq(
   nrc.training.sigmas["90%"] * 0.75,
@@ -267,6 +316,7 @@ nrc.training.sigmas <- seq(
   length.out = 10
 )
 
+# Train the model
 nrc.ksvm.model <- train(
   nrc.training.predictors,
   nrc.training$is_fake,
@@ -279,11 +329,18 @@ nrc.ksvm.model <- train(
 )
 message("NRC SVM model built in ", timer - proc.time(), " seconds.")
 
-# KSVM VAD
+# Accuracy measures against training dataset
+confusionMatrix(fitted(nrc.ksvm.model$finalModel), nrc.training$is_fake)
+# 88.4%
+
+# KSVM model using the NRC VAD dimensions
 message("KSVM VAD")
 timer <- proc.time()
+
+# Create the matrix of predictors
 vad.training.predictors <- makePredictors(vad.training)
 
+# Create the set of values for tuning sigma
 vad.training.sigmas <- sigest(vad.training.predictors, frac = 1)
 vad.training.sigmas <- seq(
   vad.training.sigmas["90%"] * 0.75,
@@ -291,6 +348,7 @@ vad.training.sigmas <- seq(
   length.out = 10
 )
 
+# Train the model
 vad.ksvm.model <- train(
   vad.training.predictors,
   vad.training$is_fake,
@@ -303,76 +361,42 @@ vad.ksvm.model <- train(
 )
 message("NRC VAD SVM model built in ", timer - proc.time(), " seconds.")
 
+# Build an ensemble model
+#
+
+# Accuracy measures against training dataset
+confusionMatrix(fitted(vad.ksvm.model$finalModel), vad.training$is_fake)
+# 86.2%
+
 ## Stop and deregister parallel computing
 stopCluster(cl)
 registerDoSEQ()
 remove(cl)
 
-## Accuracy measures against training datasets
-# Afinn RF
-confusionMatrix(fitted(afinn.rf.model), afinn.training$is_fake)
-# 74.9
-# 82.3
-
-# NRC RF
-confusionMatrix(fitted(nrc.rf.model), nrc.training$is_fake)
-# 99.2
-# 99.8
-
-# NRC VAD RF
-confusionMatrix(fitted(vad.rf.model), vad.training$is_fake)
-# 99.8
-# 99.8
-
-
-# Afinn SVM
-confusionMatrix(fitted(afinn.ksvm.model$finalModel), afinn.training$is_fake)
-# 74.8
-# 82
-
-# NRC SVM
-confusionMatrix(fitted(nrc.ksvm.model$finalModel), nrc.training$is_fake)
-# 83.6
-# 88.4
-
-# NRC VAD SVM
-confusionMatrix(fitted(vad.ksvm.model$finalModel), vad.training$is_fake)
-# 80.8
-# 86.2
-
-## Make final predictions/measure Acc
+# Final accuracy measures against training set
 # Afinn RF
 confusionMatrix(predict(afinn.rf.model, afinn.testing), afinn.testing$is_fake)
-# 76.6
 # 81.9
 
 # NRC RF
 confusionMatrix(predict(nrc.rf.model, nrc.testing), nrc.testing$is_fake)
-# 84.3
 # 89
 
 # NRC VAD RF
 confusionMatrix(predict(vad.rf.model, vad.testing), vad.testing$is_fake)
-# 83.3
 # 87.2
 
 
 # Afinn SVM
 confusionMatrix(predict(afinn.ksvm.model, makePredictors(afinn.testing)), afinn.testing$is_fake)
-# 77
 # 82.3
 
 # NRC SVM
 confusionMatrix(predict(nrc.ksvm.model, makePredictors(nrc.testing)), nrc.testing$is_fake)
-# 80.7
 # 87.3
 
 # NRC VAD SVM
 confusionMatrix(predict(vad.ksvm.model, makePredictors(vad.testing)), vad.testing$is_fake)
-# 80.8
 # 86.1
 
-## Ensembles
-# training
-
-# testing
+# Ensemble model
