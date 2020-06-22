@@ -33,19 +33,18 @@ message("Cleaning Dataset, this takes a few moments (iconv + grep)")
 all.news <- lazy_dt(all.news) %>%
   mutate(
     title = str_trim(iconv(title, from = "utf8", to = "latin1")),
-    text = str_trim(iconv(text, from = "utf8", to = "latin1")),
-    is_cap_title = grepl('\\b?[A-Z]+\\b?', title)
+    text = str_trim(iconv(text, from = "utf8", to = "latin1"))
   ) %>%
-  filter(text != '' && title != '') %>%
+  filter(!is.na(title) & title != '') %>%
   mutate(
     full_text = paste(text, title),
     is_fake = as.factor(is_fake),
-    cap_title = as.factor(is_cap_title)
+    title_caps = str_count(title, "[^a-z][A-Z]+[^a-z]")
   ) %>%
-  select(title, full_text, is_fake, is_cap_title) %>%
+  select(title, full_text, is_fake, title_caps) %>%
   as.data.table()
 
-# Mark training and test datasets.
+# Mark training and test datasets, they will be split later.
 train.index <- createDataPartition(
   all.news$is_fake,
   p = 0.8,
@@ -92,7 +91,7 @@ afinn <- as_tibble(tokenized) %>%
 afinn <- afinn[
   ,
   list(sentiment = sum(sentiment)),
-  by  = list(title, is_fake, is_cap_title, set)
+  by  = list(title, is_fake, title_caps, set)
 ]
 
 message(". . . NRC")
@@ -116,7 +115,7 @@ nrc <- as_tibble(nrc) %>%
     values_fn = list(sentiment = length),
     values_fill = list(sentiment = 0)
   ) %>%
-  group_by(title, is_fake, is_cap_title, set) %>%
+  group_by(title, is_fake, title_caps, set) %>%
   summarize_at(vars(-token), list(sum)) %>%
   as.data.table()
 
@@ -140,14 +139,8 @@ vad <- vad[
     arousal = sum(arousal),
     dominance = sum(dominance)
   ),
-  by = list(title, is_fake, is_cap_title, set)
+  by = list(title, is_fake, title_caps, set)
 ]
-
-# ## Remove title from all sets, they're not needed anymore
-# ## and were only used as identifiers at this point
-# afinn$title = NULL
-# nrc$title = NULL
-# vad$title = NULL
 
 ## Splitting test and training sets
 afinn <- split(afinn, by = "set", keep.by = FALSE)
@@ -164,7 +157,6 @@ vad.testing <- vad$testing
 
 remove(tokenized, afinn, nrc, vad)
 
-
 ## Begin building models
 
 # We can leveraging matrix-based function signatures for all the models we build
@@ -177,16 +169,6 @@ makePredictors <- function(dt) {
   dt$is_fake = NULL
 
   as.matrix(dt)
-
-  # # convert this bool factor into a -1/1 integer col
-  # is_cap_title = ifelse(dt$is_cap_title == TRUE, 1, -1)
-  # dt$is_cap_title = NULL
-  #
-  # # bind all the data together for return as a matrix
-  # cbind(
-  #   is_cap_title = is_cap_title,
-  #   as.matrix(dt)
-  # )
 }
 
 ## Random Forests
