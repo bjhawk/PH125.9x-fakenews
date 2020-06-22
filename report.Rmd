@@ -30,6 +30,16 @@ if(!require(tidytext))
   install.packages("tidytext", repos = "http://cran.us.r-project.org")
 if(!require(doSNOW))
   install.packages("doSNOW", repos = "http://cran.us.r-project.org")
+if(!require(kernlab))
+  install.packages("kernlab", repos = "http://cran.us.r-project.org")
+if(!require(e1071))
+  install.packages("e1071", repos = "http://cran.us.r-project.org")
+if(!require(randomForest))
+  install.packages("randomForest", repos = "http://cran.us.r-project.org")
+if(!require(foreach))
+  install.packages("foreach", repos = "http://cran.us.r-project.org")
+if(!require(import))
+  install.packages("import", repos = "http://cran.us.r-project.org")
 
 options(digits = 3)
 
@@ -447,7 +457,7 @@ Given the nature of our predictors being numeric and continuous, decision trees 
 
 I have implemented this here on a relatively powerful consumer PC, with a roughly 4Ghz processor running 16 threads.
 
-```{r build_rf_models, eval=FALSE}
+```{r build_rf_models}
 # Start and register parallel threads
 # NB: Never set this number higher than your computer
 # can handle!   
@@ -490,7 +500,7 @@ vad.rf.model <- train(
 
 Now that we've built our models, we can begin to measure their accuracy with the training data used to produce them. Obviously this will be overfit, however it does begin to show us whether or not these attempts were in anywhere near successful.
 
-```{r test_rf_models_training, eval=FALSE}
+```{r test_rf_models_training}
 ## Accuracy measures against training datasets
 # Afinn RF
 confusionMatrix(fitted(afinn.rf.model), afinn.training$is_fake)
@@ -515,7 +525,7 @@ confusionMatrix(fitted(vad.rf.model), vad.training$is_fake)
 
 > test models on training sets
 
-```{r, test_svm_models_training, eval=FALSE}
+```{r, test_svm_models_training}
 # Afinn SVM
 confusionMatrix(fitted(afinn.ksvm.model$finalModel), afinn.training$is_fake)
 # 82
@@ -529,20 +539,127 @@ confusionMatrix(fitted(vad.ksvm.model$finalModel), vad.training$is_fake)
 # 86.2
 ```
 
-#### Ensemble Model?
+#### Ensemble Model
 
->  ?
+There are some limitations to building an ensemble model, specifically with this dataset. Due to the relatively small size of the dataset, and the nature of how limiting lexicons can be, not every model built above can make predictions for every article in the original data. If an article, once broken into tokens, contains no matching rows to join to a given lexicon, eg Afinn, then that article is inherently excluded from the dataset due to the joining process required to build the models. An ensemble model will have to account for there being sparse data - ie given 6 predicted outcomes for every article in the original data some of those outcomes will be `NA`.
+
+To accommodate this, and to try to make our ensemble model more accurate, we will begin by grabbing all the unique articles in our training data along with its respective `is_fake` flag. Then we can make the predictions and use left joining to create a matrix of predicted outcomes. Here we will use a "voting" scheme - given 6 predictions (some of which may be `NA`) we will simply take whichever has the most votes. In the case of a tie, we can simply guess as we did for our naive approach.
+
+```{r test_ensemble_model_training}
+# Create a container for our models, gathering all articles in the training set
+ensemble <- rbind(
+  afinn.training[, list(title, is_fake)],
+  nrc.training[, list(title, is_fake)],
+  vad.training[, list(title, is_fake)]
+)
+
+# Take only the unique articles
+ensemble <- unique(ensemble)
+
+# Create data.tables from the training data with a column for their respective
+# predictions
+afinn.rf <- cbind(
+  afinn.training,
+  afinn.rf = predict(afinn.rf.model, makePredictors(afinn.training))
+)
+nrc.rf <- cbind(
+  nrc.training,
+  nrc.rf = predict(nrc.rf.model, makePredictors(nrc.training))
+)
+vad.rf <- cbind(
+  vad.training,
+  vad.rf = predict(vad.rf.model, makePredictors(vad.training))
+)
+afinn.ksvm <- cbind(
+  afinn.training,
+  afinn.ksvm = predict(afinn.ksvm.model, makePredictors(afinn.training))
+)
+nrc.ksvm <- cbind(
+  nrc.training,
+  nrc.ksvm = predict(nrc.ksvm.model, makePredictors(nrc.training))
+)
+vad.ksvm <- cbind(
+  vad.training,
+  vad.ksvm = predict(vad.ksvm.model, makePredictors(vad.training))
+)
+
+# Remove columns not needed for this step
+afinn.rf <- afinn.rf[, list(title, afinn.rf)]
+nrc.rf <- nrc.rf[, list(title, nrc.rf)]
+vad.rf <- vad.rf[, list(title, vad.rf)]
+afinn.ksvm <- afinn.ksvm[, list(title, afinn.ksvm)]
+nrc.ksvm <- nrc.ksvm[, list(title, nrc.ksvm)]
+vad.ksvm <- vad.ksvm[, list(title, vad.ksvm)]
+
+# Set keys
+setkey(ensemble, title)
+setkey(afinn.rf, title)
+setkey(nrc.rf, title)
+setkey(vad.rf, title)
+setkey(afinn.ksvm, title)
+setkey(nrc.ksvm, title)
+setkey(vad.ksvm, title)
+
+# a series of left-joins
+ensemble <- afinn.rf[ensemble]
+ensemble <- nrc.rf[ensemble]
+ensemble <- vad.rf[ensemble]
+ensemble <- afinn.ksvm[ensemble]
+ensemble <- nrc.ksvm[ensemble]
+ensemble <- vad.ksvm[ensemble]
+
+# We can look at the matrix we've created
+ensemble[, afinn.rf:vad.ksvm]
+
+# Take the columns of predictions, convert them to a matrix of
+# boolean values, then take the mean of each row.
+ensemble[
+  ,
+  ensemble.mean := rowMeans(do.call(
+    cbind,
+    lapply(ensemble[, afinn.rf:vad.ksvm], as.logical)
+  ), na.rm = TRUE)
+]
+
+# Convert the means above to predictions as a factor
+# Predictions > 0.5 align with predicting is_fake = TRUE
+ensemble[
+  ensemble.mean > 0.5,
+  ensemble := "TRUE",
+]
+
+# Predictions < 0.5 align with predicting is_fake = FALSE
+ensemble[
+  ensemble.mean < 0.5,
+  ensemble := "FALSE",
+]
+
+# If the prediction is exactly 0.5, use naive guessing
+ensemble[
+  ensemble.mean == 0.5,
+  ensemble := sample(c("TRUE", "FALSE"), .N, replace = TRUE),
+]
+
+# Make this column a factor for use in confusionMatrix
+ensemble[, ensemble := as.factor(ensemble)]
+
+# See the results
+confusionMatrix(e$ensemble, e$is_fake)
+# 90.8%
+```
+
+Understandably, the ensemble model is about as accurate as the mean of the individual accuracies for our 6 models. It will remain to be seen if this continues to be as consistently accurate when applied to our testing dataset
 
 \pagebreak
 
 
 # Results
 
-> a results section that presents the modeling results and discusses the model performance; and
-
 #### Random Forests
 
-```{r test_rf_models_testing, eval=FALSE}
+The results for our Random Forest models suffer against the testing set when compared to the results from the training set. This is expected, but we are still getting very good results. In fact, as we'll see below, the RF models outperformed the SVM models entirely. These results show that the NRC lexicon gave us the best results for a RF approach.
+
+```{r test_rf_models_testing}
 ## Make final predictions/measure Acc
 # Afinn RF
 confusionMatrix(predict(afinn.rf.model, afinn.testing), afinn.testing$is_fake)
@@ -559,7 +676,9 @@ confusionMatrix(predict(vad.rf.model, vad.testing), vad.testing$is_fake)
 
 #### Support Vector Machines
 
-```{r test_svm_models_testing, eval=FALSE}
+The KSVM model results predicting against the training set are far closer to their counterparts when predicting for the testing set. We again see below that NRC lexicon gave us the best results with this kind of model.
+
+```{r test_svm_models_testing}
 # Afinn SVM
 confusionMatrix(predict(afinn.ksvm.model, makePredictors(afinn.testing)), afinn.testing$is_fake)
 # 82.3
@@ -575,16 +694,120 @@ confusionMatrix(predict(vad.ksvm.model, makePredictors(vad.testing)), vad.testin
 
 #### Ensemble Model
 
-> ?
+We can again make all 6 sets of predictions, and gather an ensemble model. The results are not much better than the results of the individual models, but this isn't unexpected since the accuracies of each individual model are not hugely different.
+
+```{r test_ensemble_model_testing}
+# Ensemble model for testing dataset
+# Create a container for our models, gathering all articles in the training set
+ensemble <- rbind(
+  afinn.testing[, list(title, is_fake)],
+  nrc.testing[, list(title, is_fake)],
+  vad.testing[, list(title, is_fake)]
+)
+
+# Take only the unique articles
+ensemble <- unique(ensemble)
+
+# Create data.tables from the testing data with a column for their respective
+# predictions
+afinn.rf <- cbind(
+  afinn.testing,
+  afinn.rf = predict(afinn.rf.model, makePredictors(afinn.testing))
+)
+nrc.rf <- cbind(
+  nrc.testing,
+  nrc.rf = predict(nrc.rf.model, makePredictors(nrc.testing))
+)
+vad.rf <- cbind(
+  vad.testing,
+  vad.rf = predict(vad.rf.model, makePredictors(vad.testing))
+)
+afinn.ksvm <- cbind(
+  afinn.testing,
+  afinn.ksvm = predict(afinn.ksvm.model, makePredictors(afinn.testing))
+)
+nrc.ksvm <- cbind(
+  nrc.testing,
+  nrc.ksvm = predict(nrc.ksvm.model, makePredictors(nrc.testing))
+)
+vad.ksvm <- cbind(
+  vad.testing,
+  vad.ksvm = predict(vad.ksvm.model, makePredictors(vad.testing))
+)
+
+# Remove columns not needed for this step
+afinn.rf <- afinn.rf[, list(title, afinn.rf)]
+nrc.rf <- nrc.rf[, list(title, nrc.rf)]
+vad.rf <- vad.rf[, list(title, vad.rf)]
+afinn.ksvm <- afinn.ksvm[, list(title, afinn.ksvm)]
+nrc.ksvm <- nrc.ksvm[, list(title, nrc.ksvm)]
+vad.ksvm <- vad.ksvm[, list(title, vad.ksvm)]
+
+# Set keys
+setkey(ensemble, title)
+setkey(afinn.rf, title)
+setkey(nrc.rf, title)
+setkey(vad.rf, title)
+setkey(afinn.ksvm, title)
+setkey(nrc.ksvm, title)
+setkey(vad.ksvm, title)
+
+# a series of left-joins
+ensemble <- afinn.rf[ensemble]
+ensemble <- nrc.rf[ensemble]
+ensemble <- vad.rf[ensemble]
+ensemble <- afinn.ksvm[ensemble]
+ensemble <- nrc.ksvm[ensemble]
+ensemble <- vad.ksvm[ensemble]
+
+# We can look at the matrix we've created
+ensemble[, afinn.rf:vad.ksvm]
+
+# Take the columns of predictions, convert them to a matrix of
+# boolean values, then take the mean of each row.
+ensemble[
+  ,
+  ensemble.mean := rowMeans(do.call(
+    cbind,
+    lapply(ensemble[, afinn.rf:vad.ksvm], as.logical)
+  ), na.rm = TRUE)
+]
+
+# Convert the means above to predictions as a factor
+# Predictions > 0.5 align with predicting is_fake = TRUE
+ensemble[
+  ensemble.mean > 0.5,
+  ensemble := "TRUE",
+]
+
+# Predictions < 0.5 align with predicting is_fake = FALSE
+ensemble[
+  ensemble.mean < 0.5,
+  ensemble := "FALSE",
+]
+
+# If the prediction is exactly 0.5, use naive guessing
+ensemble[
+  ensemble.mean == 0.5,
+  ensemble := sample(c("TRUE", "FALSE"), .N, replace = TRUE),
+]
+
+# Make this column a factor for use in confusionMatrix
+ensemble[, ensemble := as.factor(ensemble)]
+
+# See the results
+confusionMatrix(e$ensemble, e$is_fake)
+#  86.8
+```
 
 \pagebreak
 
 
 # Conclusion
 
-> a conclusion section that gives a brief summary of the report, its potential impact, its limitations, and future work.
+This analysis has been a very brief and surface-level exploration of classifying "fake" news using machine learning. There are a great many more techniques to be applied, such as bigram analysis and and Natural Language Processing. This work is not uncommon - many social media and news outlets are attempting to do exactly this kind of analysis on their own content so as to be responsive to the needs of their consumers and responsible for the platform they give to the people producing that media.
 
-
+I believe the greatest limitation this report suffers is the source data itself. Any and all conclusions drawn from it should be taken with a grain of salt - the original data selection was skewed and biased, and the aggregated source data was not large enough to consider this analysis a thorough one. If there was a larger, more robust, and more objectively classified set of data one could apply these approaches as the starting point to further exploration of these and other techniques.
 
 
 ***

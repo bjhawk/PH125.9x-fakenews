@@ -1,15 +1,33 @@
-library(caret)
-library(tidytext)
-library(tidyr)
-library(data.table)
-library(dplyr)
-library(dtplyr)
-library(stringr)
-library(kernlab)
-library(doSNOW)
-
-## TODO what libs need to be required/installed?
-## e1071, randomForest, foreach, import
+if(!require(tidyr))
+  install.packages("tidyr", repos = "http://cran.us.r-project.org")
+if(!require(dplyr))
+  install.packages("dplyr", repos = "http://cran.us.r-project.org")
+if(!require(data.table))
+  install.packages("data.table", repos = "http://cran.us.r-project.org")
+if(!require(dtplyr))
+  install.packages("dtplyr", repos = "http://cran.us.r-project.org")
+if(!require(stringr))
+  install.packages("stringr", repos = "http://cran.us.r-project.org")
+if(!require(caret))
+  install.packages("caret", repos = "http://cran.us.r-project.org")
+if(!require(ggplot2))
+  install.packages("ggplot2", repos = "http://cran.us.r-project.org")
+if(!require(lubridate))
+  install.packages("lubridate", repos = "http://cran.us.r-project.org")
+if(!require(tidytext))
+  install.packages("tidytext", repos = "http://cran.us.r-project.org")
+if(!require(doSNOW))
+  install.packages("doSNOW", repos = "http://cran.us.r-project.org")
+if(!require(kernlab))
+  install.packages("kernlab", repos = "http://cran.us.r-project.org")
+if(!require(e1071))
+  install.packages("e1071", repos = "http://cran.us.r-project.org")
+if(!require(randomForest))
+  install.packages("randomForest", repos = "http://cran.us.r-project.org")
+if(!require(foreach))
+  install.packages("foreach", repos = "http://cran.us.r-project.org")
+if(!require(import))
+  install.packages("import", repos = "http://cran.us.r-project.org")
 
 options(digits = 3)
 set.seed(1989)
@@ -371,13 +389,14 @@ registerDoSEQ()
 remove(cl)
 
 # Build an ensemble model
-# Create a container for our models
+# Create a container for our models, gathering all articles in the training set
 ensemble <- rbind(
   afinn.training[, list(title, is_fake)],
   nrc.training[, list(title, is_fake)],
   vad.training[, list(title, is_fake)]
 )
 
+# Take only the unique articles
 ensemble <- unique(ensemble)
 
 # create data.tables from the training data with a column for their respective
@@ -435,64 +454,83 @@ ensemble <- vad.ksvm[ensemble]
 # We can look at the matrix we've created
 ensemble[, afinn.rf:vad.ksvm]
 
-e <- rowMeans(do.call(cbind, lapply(ensemble[, afinn.rf:vad.ksvm], as.logical)), na.rm = TRUE)
+# Take the columns of predictions, convert them to a matrix of
+# boolean values, then take the mean of each row.
+ensemble[
+  ,
+  ensemble.mean := rowMeans(do.call(
+    cbind,
+    lapply(ensemble[, afinn.rf:vad.ksvm], as.logical)
+  ), na.rm = TRUE)
+]
 
-e <- ensemble[
-  e > 0.5,
+# Convert the means above to predictions as a factor
+# Predictions > 0.5 align with predicting is_fake = TRUE
+ensemble[
+  ensemble.mean > 0.5,
   ensemble := "TRUE",
-][
-  e < 0.5,
+]
+
+# Predictions < 0.5 align with predicting is_fake = FALSE
+ensemble[
+  ensemble.mean < 0.5,
   ensemble := "FALSE",
-][
-  e == 0.5,
+]
+
+# If the prediction is exactly 0.5, use naive guessing
+ensemble[
+  ensemble.mean == 0.5,
   ensemble := sample(c("TRUE", "FALSE"), .N, replace = TRUE),
 ]
 
-e[, ensemble := as.factor(ensemble)]
+# Make this column a factor for use in confusionMatrix
+ensemble[, ensemble := as.factor(ensemble)]
 
+# See the results
 confusionMatrix(e$ensemble, e$is_fake)
+# 90.8%
 
 # Final accuracy measures against testing set
 # Afinn RF
 confusionMatrix(predict(afinn.rf.model, makePredictors(afinn.testing)), afinn.testing$is_fake)
-# 81.9
+# 81.9%
 
 # NRC RF
 confusionMatrix(predict(nrc.rf.model, makePredictors(nrc.testing)), nrc.testing$is_fake)
-# 88.9
+# 88.9%
 
 # NRC VAD RF
 confusionMatrix(predict(vad.rf.model, makePredictors(vad.testing)), vad.testing$is_fake)
-# 87.3
+# 87.3%
 
 
 # Afinn SVM
 confusionMatrix(predict(afinn.ksvm.model, makePredictors(afinn.testing)), afinn.testing$is_fake)
-# 82.3
+# 82.3%
 
 # NRC SVM
 confusionMatrix(predict(nrc.ksvm.model, makePredictors(nrc.testing)), nrc.testing$is_fake)
-# 87.3
+# 87.3%
 
 # NRC VAD SVM
 confusionMatrix(predict(vad.ksvm.model, makePredictors(vad.testing)), vad.testing$is_fake)
-# 86.1
+# 86.1%
 
 # clean up ensemble data
-remove(e, ensemble, afinn.rf, nrc.rf, vad.rf, afinn.ksvm, nrc.ksvm, vad.ksvm)
+remove(ensemble, afinn.rf, nrc.rf, vad.rf, afinn.ksvm, nrc.ksvm, vad.ksvm)
 
 # Ensemble model for testing dataset
-# Build an ensemble model
-# Create a container for our models
+# Create a container for our models, gathering all articles in the training set
 ensemble <- rbind(
   afinn.testing[, list(title, is_fake)],
   nrc.testing[, list(title, is_fake)],
   vad.testing[, list(title, is_fake)]
 )
 
+# Take only the unique articles
 ensemble <- unique(ensemble)
 
-# create data.tables from the testing data with a column for their respective
+# Create data.tables from the testing data with a column for their respective
 # predictions
 afinn.rf <- cbind(
   afinn.testing,
@@ -551,7 +589,7 @@ ensemble[, afinn.rf:vad.ksvm]
 # boolean values, then take the mean of each row.
 ensemble[
   ,
-  ensemble := rowMeans(do.call(
+  ensemble.mean := rowMeans(do.call(
     cbind,
     lapply(ensemble[, afinn.rf:vad.ksvm], as.logical)
   ), na.rm = TRUE)
@@ -560,24 +598,24 @@ ensemble[
 # Convert the means above to predictions as a factor
 # Predictions > 0.5 align with predicting is_fake = TRUE
 ensemble[
-  e > 0.5,
+  ensemble.mean > 0.5,
   ensemble := "TRUE",
 ]
 
 # Predictions < 0.5 align with predicting is_fake = FALSE
 ensemble[
-  e < 0.5,
+  ensemble.mean < 0.5,
   ensemble := "FALSE",
 ]
 
 # If the prediction is exactly 0.5, use naive guessing
 ensemble[
-  e == 0.5,
+  ensemble.mean == 0.5,
   ensemble := sample(c("TRUE", "FALSE"), .N, replace = TRUE),
 ]
 
 # Make this column a factor for use in confusionMatrix
-e[, ensemble := as.factor(ensemble)]
+ensemble[, ensemble := as.factor(ensemble)]
 
 # See the results
 confusionMatrix(e$ensemble, e$is_fake)
