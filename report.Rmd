@@ -524,15 +524,15 @@ Now that we've built our models, we can begin to measure their accuracy with the
 ## Accuracy measures against training datasets
 # Afinn RF
 confusionMatrix(fitted(afinn.rf.model), afinn.training$is_fake)
-# 82.3
+# 82.3%
 
 # NRC RF
 confusionMatrix(fitted(nrc.rf.model), nrc.training$is_fake)
-# 99.8
+# 99.8%
 
 # NRC VAD RF
 confusionMatrix(fitted(vad.rf.model), vad.training$is_fake)
-# 99.8
+# 99.8%
 ```
 
 #### Support Vector Machines
@@ -589,6 +589,10 @@ Now we are ready to begin training these KSVM models. The one parameter we need 
 The tuning values for `sigma` will come from a helper function in the `kernlab` package called `sigest`, that estimates the range of these values based on a given fraction of the training data. I have chosen to expand this range by 25% on either side, and cover a very large number of possible parameters. This step is done for each model, as each model has it's own lexicon-bound training data to contend with.
 
 ```{r build_svm_models}
+# Create and register threads for parallel computing
+cl <- makeSOCKcluster(nThreads)
+registerDoSNOW(cl)
+
 # Create the matrix of predictors
 afinn.training.predictors <- makePredictors(afinn.training)
 
@@ -659,6 +663,11 @@ vad.ksvm.model <- train(
     C = 1
   )
 )
+
+# Stop and de-register parallel computing
+stopCluster(cl)
+registerDoSEQ()
+remove(cl)
 ```
 
 Now with our models built, we can check the accuracy achieved with the training set.
@@ -666,15 +675,15 @@ Now with our models built, we can check the accuracy achieved with the training 
 ```{r, test_svm_models_training}
 # Afinn SVM
 confusionMatrix(fitted(afinn.ksvm.model$finalModel), afinn.training$is_fake)
-# 82
+# 82%
 
 # NRC SVM
 confusionMatrix(fitted(nrc.ksvm.model$finalModel), nrc.training$is_fake)
-# 88.4
+# 88.4%
 
 # NRC VAD SVM
 confusionMatrix(fitted(vad.ksvm.model$finalModel), vad.training$is_fake)
-# 86.2
+# 86.2%
 ```
 
 These accuracies are not as good as the RF models above, which truthfully surprised me. That said, it's possible that these accuracies are more consistent and will hold out better when using the testing set later.
@@ -792,7 +801,6 @@ Understandably, the ensemble model is about as accurate as the mean of the indiv
 
 \pagebreak
 
-
 # Results
 
 #### Random Forests
@@ -803,15 +811,15 @@ The results for our Random Forest models suffer against the testing set when com
 ## Make final predictions/measure Acc
 # Afinn RF
 confusionMatrix(predict(afinn.rf.model, afinn.testing), afinn.testing$is_fake)
-# 81.9
+# 81.9%
 
 # NRC RF
 confusionMatrix(predict(nrc.rf.model, nrc.testing), nrc.testing$is_fake)
-# 89
+# 89%
 
 # NRC VAD RF
 confusionMatrix(predict(vad.rf.model, vad.testing), vad.testing$is_fake)
-# 87.2
+# 87.2%
 ```
 
 #### Support Vector Machines
@@ -821,15 +829,15 @@ The KSVM model results predicting against the training set are far closer to the
 ```{r test_svm_models_testing}
 # Afinn SVM
 confusionMatrix(predict(afinn.ksvm.model, makePredictors(afinn.testing)), afinn.testing$is_fake)
-# 82.3
+# 82.3%
 
 # NRC SVM
 confusionMatrix(predict(nrc.ksvm.model, makePredictors(nrc.testing)), nrc.testing$is_fake)
-# 87.3
+# 87.3%
 
 # NRC VAD SVM
 confusionMatrix(predict(vad.ksvm.model, makePredictors(vad.testing)), vad.testing$is_fake)
-# 86.1
+# 86.1%
 ```
 
 #### Ensemble Model
