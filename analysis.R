@@ -547,20 +547,38 @@ ensemble <- vad.ksvm[ensemble]
 # We can look at the matrix we've created
 ensemble[, afinn.rf:vad.ksvm]
 
-e <- rowMeans(do.call(cbind, lapply(ensemble[, afinn.rf:vad.ksvm], as.logical)), na.rm = TRUE)
+# Take the columns of predictions, convert them to a matrix of
+# boolean values, then take the mean of each row.
+ensemble[
+  ,
+  ensemble := rowMeans(do.call(
+    cbind,
+    lapply(ensemble[, afinn.rf:vad.ksvm], as.logical)
+  ), na.rm = TRUE)
+]
 
-e <- ensemble[
+# Convert the means above to predictions as a factor
+# Predictions > 0.5 align with predicting is_fake = TRUE
+ensemble[
   e > 0.5,
   ensemble := "TRUE",
-][
+]
+
+# Predictions < 0.5 align with predicting is_fake = FALSE
+ensemble[
   e < 0.5,
   ensemble := "FALSE",
-][
+]
+
+# If the prediction is exactly 0.5, use naive guessing
+ensemble[
   e == 0.5,
   ensemble := sample(c("TRUE", "FALSE"), .N, replace = TRUE),
 ]
 
+# Make this column a factor for use in confusionMatrix
 e[, ensemble := as.factor(ensemble)]
 
+# See the results
 confusionMatrix(e$ensemble, e$is_fake)
 #  86.8
