@@ -460,6 +460,19 @@ Given the nature of our predictors being numeric and continuous, decision trees 
 I have implemented this here on a relatively powerful consumer PC, with a roughly 4Ghz processor running 16 threads.
 
 ```{r build_rf_models}
+# We can leveraging matrix-based function signatures for all the models we build
+# This helper function will create a matrix of all predictors from a given data.table
+makePredictors <- function(dt) {
+  # drop our title, used only as an identifier column
+  dt$title = NULL
+
+  # drop the response column
+  dt$is_fake = NULL
+
+  # return the rest of the columns as a matrix
+  as.matrix(dt)
+}
+
 # Start and register parallel threads
 # NB: Never set this number higher than your computer
 # can handle!   
@@ -519,8 +532,131 @@ confusionMatrix(fitted(vad.rf.model), vad.training$is_fake)
 
 #### Support Vector Machines
 
-In essence, Support Vector Machines allow a model to mathematically draw boundaries around groups of data within higher-order planes.
+In essence, Support Vector Machines allow a model to mathematically draw boundaries around groups of data within higher-order planes. The `ksvm` function used here and in the analysis at large is a type of SVM that leverages something called the _kernel trick_: an ingenious application of mathematical assumptions that allows SVMs to function well in higher dimensions. This, however, is not a thesis on the mathematics of SVMs, so here I will demonstrate visually how they are able to separate clusters of related data.
 
+```{r illustrate_svm_prep}
+# Grab a very small chunk of data to demonstrate with
+# 500 rows, with only "joy" and "disgust" dimensions as predictors
+data.small <- nrc.training[
+  sample.int(nrow(nrc.training), 500),
+  list(is_fake, joy, disgust)
+]
+
+# Scatterplot of the predictors, color coded by outcome
+data.small %>%
+  ggplot(aes(x = joy, y = disgust, color = is_fake)) +
+  geom_point()
+```
+
+As we can see, there does seem to be a general visual trend that one color is more prevalent in the upper-right of the plot, while the cluster in the lower left seems to be more focused on the other color. Now we can train a model on this data.
+
+```{r illustrate_svm_make_model}
+# Grab a matrix of predictors and a response vector
+predictors <- as.matrix(data.small[, .(joy, disgust)])
+response <- data.small$is_fake
+
+# Train a basic KSVM model
+ksvm.model <- ksvm(
+  x = predictors,
+  y = response
+)
+
+# Make predictions and view accuracy
+ksvm.predictions <- predict(
+  ksvm.model,
+  as.matrix(nrc.training[, .(joy, disgust)])
+)
+confusionMatrix(ksvm.predictions, nrc.training$is_fake)
+# 60.5%
+```
+
+With this little data, and only two dimensions, it is unsurprising that the accuracy of this model is not great. We can show the boundaries drawn by this model in a similar scatterplot.
+
+```{r illustrate_svm_boudaries}
+# Visualize the Boundaries our KSVM model has created.
+plot(ksvm.model, data = predictors)
+```
+
+While the model clearly has a lot of learning still to do, we can see that generally the boundaries drawn make sense. In any machine learning problem it is the befuddled area in the middle that is always hardest to predict, so with more data, more dimensions, and a tuned algorithm we should be able to achieve much better results.
+
+Now we are ready to begin training these KSVM models. The one parameter we need to train is `sigma`, which controls how linear or flexible the decision boundary becomes. The other tuning parameter `C` is a cost parameter, used to penalize large residuals after normalization. Due to the relatively small size of our data, I have chosen to leave this as the default of 1.
+
+The tuning values for `sigma` will come from a helper function in the `kernlab` package called `sigest`, that estimates the range of these values based on a given fraction of the training data. I have chosen to expand this range by 25% on either side, and cover a very large number of possible parameters. This step is done for each model, as each model has it's own lexicon-bound training data to contend with.
+
+```{r build_svm_models}
+# Create the matrix of predictors
+afinn.training.predictors <- makePredictors(afinn.training)
+
+# Here, and below, sigmas are going to come from an estimation function provided
+# in the `kernlab` package. The range of these will be expanded by 25% so that
+# we can try a broader set of values for sigma.
+afinn.training.sigmas <- sigest(afinn.training.predictors, frac = 1)
+afinn.training.sigmas <- seq(
+  afinn.training.sigmas["90%"] * 0.75,
+  afinn.training.sigmas["10%"] * 1.25,
+  length.out = 10
+)
+
+# train the model
+afinn.ksvm.model <- train(
+  afinn.training.predictors,
+  afinn.training$is_fake,
+  method = 'svmRadial',
+  trControl = ksvm.trainControl,
+  tuneGrid = data.table(
+    sigma = afinn.training.sigmas,
+    C = 1
+  )
+)
+
+# Create the matrix of predictors
+nrc.training.predictors <- makePredictors(nrc.training)
+
+# Create set of values for tuning sigma
+nrc.training.sigmas <- sigest(nrc.training.predictors, frac = 1)
+nrc.training.sigmas <- seq(
+  nrc.training.sigmas["90%"] * 0.75,
+  nrc.training.sigmas["10%"] * 1.25,
+  length.out = 10
+)
+
+# Train the model
+nrc.ksvm.model <- train(
+  nrc.training.predictors,
+  nrc.training$is_fake,
+  method = 'svmRadial',
+  trControl = ksvm.trainControl,
+  tuneGrid = data.table(
+    sigma = nrc.training.sigmas,
+    C = 1
+  )
+)
+
+# Create the matrix of predictors
+vad.training.predictors <- makePredictors(vad.training)
+
+# Create the set of values for tuning sigma
+vad.training.sigmas <- sigest(vad.training.predictors, frac = 1)
+vad.training.sigmas <- seq(
+  vad.training.sigmas["90%"] * 0.75,
+  vad.training.sigmas["10%"] * 1.25,
+  length.out = 10
+)
+
+# Train the model
+vad.ksvm.model <- train(
+  vad.training.predictors,
+  vad.training$is_fake,
+  method = 'svmRadial',
+  trControl = ksvm.trainControl,
+  tuneGrid = data.table(
+    sigma = vad.training.sigmas,
+    C = 1
+  )
+)
+```
+
+Now with our models built, we can check the accuracy achieved with the training set.
 
 ```{r, test_svm_models_training}
 # Afinn SVM
@@ -535,6 +671,8 @@ confusionMatrix(fitted(nrc.ksvm.model$finalModel), nrc.training$is_fake)
 confusionMatrix(fitted(vad.ksvm.model$finalModel), vad.training$is_fake)
 # 86.2
 ```
+
+These accuracies are not as good as the RF models above, which truthfully surprised me. That said, it's possible that these accuracies are more consistent and will hold out better when using the testing set later.
 
 #### Ensemble Model
 
