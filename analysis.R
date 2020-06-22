@@ -30,7 +30,7 @@ if(!require(import))
   install.packages("import", repos = "http://cran.us.r-project.org")
 
 options(digits = 3)
-set.seed(1989)
+set.seed(1989, sample.kind = "Rounding")
 
 ## SET THIS CAREFULLY
 nThreads <- 16
