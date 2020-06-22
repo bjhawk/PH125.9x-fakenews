@@ -593,6 +593,13 @@ The tuning values for `sigma` will come from a helper function in the `kernlab` 
 cl <- makeSOCKcluster(nThreads)
 registerDoSNOW(cl)
 
+# Create a trainControl object for all KSVM models
+ksvm.trainControl <- trainControl(
+  method = "cv",
+  number = 5,
+  allowParallel = TRUE
+)
+
 # Create the matrix of predictors
 afinn.training.predictors <- makePredictors(afinn.training)
 
@@ -793,7 +800,7 @@ ensemble[
 ensemble[, ensemble := as.factor(ensemble)]
 
 # See the results
-confusionMatrix(e$ensemble, e$is_fake)
+confusionMatrix(ensemble$ensemble, ensemble$is_fake)
 # 90.8%
 ```
 
@@ -944,7 +951,7 @@ ensemble[
 ensemble[, ensemble := as.factor(ensemble)]
 
 # See the results
-confusionMatrix(e$ensemble, e$is_fake)
+confusionMatrix(ensemble$ensemble, ensemble$is_fake)
 #  86.8
 ```
 
