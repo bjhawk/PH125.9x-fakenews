@@ -72,7 +72,7 @@ tokenized <- all.news %>%
   lazy_dt() %>%
   anti_join(data.table(token = stop_words$word), by = "token") %>%
   as.data.table()
-message("Tokens split in ", timer - proc.time(), " seconds.")
+message("Tokens split in ", (proc.time()-timer)["elapsed"], " seconds.")
 
 remove(all.news)
 
@@ -103,7 +103,7 @@ afinn <- afinn[
   by  = list(title, is_fake, title_caps, set)
 ]
 
-message("Afinn sentiment aggregated in ", timer - proc.time(), " seconds.")
+message("Afinn sentiment aggregated in ", (proc.time()-timer)["elapsed"], " seconds.")
 
 # Join tokens to the NRC lexicon
 message(". . . NRC")
@@ -134,7 +134,7 @@ nrc <- as_tibble(nrc) %>%
   summarize_at(vars(-token), list(sum)) %>%
   as.data.table()
 
-message("NRC sentiment aggregated in ", timer - proc.time(), " seconds.")
+message("NRC sentiment aggregated in ", (proc.time()-timer)["elapsed"], " seconds.")
 
 # Introduce the NRC VAD lexicon
 message(". . . NRC VAD")
@@ -162,7 +162,7 @@ vad <- vad[
   ),
   by = list(title, is_fake, title_caps, set)
 ]
-message("NRC sentiment aggregated in ", timer - proc.time(), " seconds.")
+message("NRC VAD sentiment aggregated in ", (proc.time()-timer)["elapsed"], " seconds.")
 
 ## Splitting test and training sets for each of the lexicons
 afinn <- split(afinn, by = "set", keep.by = FALSE)
@@ -217,7 +217,7 @@ afinn.rf.model <- train(
   method = "parRF",
   trControl = rf.trainControl
 )
-message("Afinn Random Forest built in ", timer - proc.time(), " seconds.")
+message("Afinn Random Forest built in ", (proc.time()-timer)["elapsed"], " seconds.")
 
 # Accuracy measures against training dataset
 confusionMatrix(fitted(afinn.rf.model), afinn.training$is_fake)
@@ -232,11 +232,11 @@ nrc.rf.model <- train(
   method = "parRF",
   trControl = rf.trainControl
 )
-message("NRC Random Forest built in ", timer - proc.time(), " seconds.")
+message("NRC Random Forest built in ", (proc.time()-timer)["elapsed"], " seconds.")
 
 # Accuracy measures against training dataset
 confusionMatrix(fitted(nrc.rf.model), nrc.training$is_fake)
-# 99.8%
+# 99.7%
 
 # Random Forest model using the NRC VAD dimensions
 message("RF NRC VAD")
@@ -247,7 +247,7 @@ vad.rf.model <- train(
   method = "parRF",
   trControl = rf.trainControl
 )
-message("NRC VAD Random Forest built in ", timer - proc.time(), " seconds.")
+message("NRC VAD Random Forest built in ", (proc.time()-timer)["elapsed"], " seconds.")
 
 # Accuracy measures against training dataset
 confusionMatrix(fitted(vad.rf.model), vad.training$is_fake)
@@ -268,9 +268,9 @@ timer <- proc.time()
 # Create the matrix of predictors
 afinn.training.predictors <- makePredictors(afinn.training)
 
-# These KSVM Models are trained against a set of tuning parameters `sigma`, 
+# These KSVM Models are trained against a set of tuning parameters `sigma`,
 # which effectively controls how linear or flexible the decision boundary
-# becomes, and `C`, a measure of cost used to penalize large residuals after 
+# becomes, and `C`, a measure of cost used to penalize large residuals after
 # normalization. Since our dataset is small, no tested values for C < 1 had
 # a positive effect, so for the sake of brevity it is defaulting to 1.
 
@@ -295,7 +295,7 @@ afinn.ksvm.model <- train(
     C = 1
   )
 )
-message("Afinn SVM model built in ", timer - proc.time(), " seconds.")
+message("Afinn SVM model built in ", (proc.time()-timer)["elapsed"], " seconds.")
 
 # Accuracy measures against training dataset
 confusionMatrix(fitted(afinn.ksvm.model$finalModel), afinn.training$is_fake)
@@ -327,11 +327,11 @@ nrc.ksvm.model <- train(
     C = 1
   )
 )
-message("NRC SVM model built in ", timer - proc.time(), " seconds.")
+message("NRC SVM model built in ", (proc.time()-timer)["elapsed"], " seconds.")
 
 # Accuracy measures against training dataset
 confusionMatrix(fitted(nrc.ksvm.model$finalModel), nrc.training$is_fake)
-# 88.4%
+# 89.3%
 
 # KSVM model using the NRC VAD dimensions
 message("KSVM VAD")
@@ -359,32 +359,111 @@ vad.ksvm.model <- train(
     C = 1
   )
 )
-message("NRC VAD SVM model built in ", timer - proc.time(), " seconds.")
-
-# Build an ensemble model
-#
+message("NRC VAD SVM model built in ", (proc.time()-timer)["elapsed"], " seconds.")
 
 # Accuracy measures against training dataset
 confusionMatrix(fitted(vad.ksvm.model$finalModel), vad.training$is_fake)
-# 86.2%
+# 86.1%
 
 ## Stop and deregister parallel computing
 stopCluster(cl)
 registerDoSEQ()
 remove(cl)
 
-# Final accuracy measures against training set
+# Build an ensemble model
+# Create a container for our models
+ensemble <- rbind(
+  afinn.training[, list(title, is_fake)],
+  nrc.training[, list(title, is_fake)],
+  vad.training[, list(title, is_fake)]
+)
+
+ensemble <- unique(ensemble)
+
+# create data.tables from the training data with a column for their respective
+# predictions
+afinn.rf <- cbind(
+  afinn.training,
+  afinn.rf = predict(afinn.rf.model, makePredictors(afinn.training))
+)
+nrc.rf <- cbind(
+  nrc.training,
+  nrc.rf = predict(nrc.rf.model, makePredictors(nrc.training))
+)
+vad.rf <- cbind(
+  vad.training,
+  vad.rf = predict(vad.rf.model, makePredictors(vad.training))
+)
+afinn.ksvm <- cbind(
+  afinn.training,
+  afinn.ksvm = predict(afinn.ksvm.model, makePredictors(afinn.training))
+)
+nrc.ksvm <- cbind(
+  nrc.training,
+  nrc.ksvm = predict(nrc.ksvm.model, makePredictors(nrc.training))
+)
+vad.ksvm <- cbind(
+  vad.training,
+  vad.ksvm = predict(vad.ksvm.model, makePredictors(vad.training))
+)
+
+# Remove columns not needed for this step
+afinn.rf <- afinn.rf[, list(title, afinn.rf)]
+nrc.rf <- nrc.rf[, list(title, nrc.rf)]
+vad.rf <- vad.rf[, list(title, vad.rf)]
+afinn.ksvm <- afinn.ksvm[, list(title, afinn.ksvm)]
+nrc.ksvm <- nrc.ksvm[, list(title, nrc.ksvm)]
+vad.ksvm <- vad.ksvm[, list(title, vad.ksvm)]
+
+# Set keys
+setkey(ensemble, title)
+setkey(afinn.rf, title)
+setkey(nrc.rf, title)
+setkey(vad.rf, title)
+setkey(afinn.ksvm, title)
+setkey(nrc.ksvm, title)
+setkey(vad.ksvm, title)
+
+# a series of left-joins
+ensemble <- afinn.rf[ensemble]
+ensemble <- nrc.rf[ensemble]
+ensemble <- vad.rf[ensemble]
+ensemble <- afinn.ksvm[ensemble]
+ensemble <- nrc.ksvm[ensemble]
+ensemble <- vad.ksvm[ensemble]
+
+# We can look at the matrix we've created
+ensemble[, afinn.rf:vad.ksvm]
+
+e <- rowMeans(do.call(cbind, lapply(ensemble[, afinn.rf:vad.ksvm], as.logical)), na.rm = TRUE)
+
+e <- ensemble[
+  e > 0.5,
+  ensemble := "TRUE",
+][
+  e < 0.5,
+  ensemble := "FALSE",
+][
+  e == 0.5,
+  ensemble := sample(c("TRUE", "FALSE"), .N, replace = TRUE),
+]
+
+e[, ensemble := as.factor(ensemble)]
+
+confusionMatrix(e$ensemble, e$is_fake)
+
+# Final accuracy measures against testing set
 # Afinn RF
-confusionMatrix(predict(afinn.rf.model, afinn.testing), afinn.testing$is_fake)
+confusionMatrix(predict(afinn.rf.model, makePredictors(afinn.testing)), afinn.testing$is_fake)
 # 81.9
 
 # NRC RF
-confusionMatrix(predict(nrc.rf.model, nrc.testing), nrc.testing$is_fake)
-# 89
+confusionMatrix(predict(nrc.rf.model, makePredictors(nrc.testing)), nrc.testing$is_fake)
+# 88.9
 
 # NRC VAD RF
-confusionMatrix(predict(vad.rf.model, vad.testing), vad.testing$is_fake)
-# 87.2
+confusionMatrix(predict(vad.rf.model, makePredictors(vad.testing)), vad.testing$is_fake)
+# 87.3
 
 
 # Afinn SVM
@@ -399,4 +478,89 @@ confusionMatrix(predict(nrc.ksvm.model, makePredictors(nrc.testing)), nrc.testin
 confusionMatrix(predict(vad.ksvm.model, makePredictors(vad.testing)), vad.testing$is_fake)
 # 86.1
 
-# Ensemble model
+# clean up ensemble data
+remove(e, ensemble, afinn.rf, nrc.rf, vad.rf, afinn.ksvm, nrc.ksvm, vad.ksvm)
+
+# Ensemble model for testing dataset
+# Build an ensemble model
+# Create a container for our models
+ensemble <- rbind(
+  afinn.testing[, list(title, is_fake)],
+  nrc.testing[, list(title, is_fake)],
+  vad.testing[, list(title, is_fake)]
+)
+
+ensemble <- unique(ensemble)
+
+# create data.tables from the testing data with a column for their respective
+# predictions
+afinn.rf <- cbind(
+  afinn.testing,
+  afinn.rf = predict(afinn.rf.model, makePredictors(afinn.testing))
+)
+nrc.rf <- cbind(
+  nrc.testing,
+  nrc.rf = predict(nrc.rf.model, makePredictors(nrc.testing))
+)
+vad.rf <- cbind(
+  vad.testing,
+  vad.rf = predict(vad.rf.model, makePredictors(vad.testing))
+)
+afinn.ksvm <- cbind(
+  afinn.testing,
+  afinn.ksvm = predict(afinn.ksvm.model, makePredictors(afinn.testing))
+)
+nrc.ksvm <- cbind(
+  nrc.testing,
+  nrc.ksvm = predict(nrc.ksvm.model, makePredictors(nrc.testing))
+)
+vad.ksvm <- cbind(
+  vad.testing,
+  vad.ksvm = predict(vad.ksvm.model, makePredictors(vad.testing))
+)
+
+# Remove columns not needed for this step
+afinn.rf <- afinn.rf[, list(title, afinn.rf)]
+nrc.rf <- nrc.rf[, list(title, nrc.rf)]
+vad.rf <- vad.rf[, list(title, vad.rf)]
+afinn.ksvm <- afinn.ksvm[, list(title, afinn.ksvm)]
+nrc.ksvm <- nrc.ksvm[, list(title, nrc.ksvm)]
+vad.ksvm <- vad.ksvm[, list(title, vad.ksvm)]
+
+# Set keys
+setkey(ensemble, title)
+setkey(afinn.rf, title)
+setkey(nrc.rf, title)
+setkey(vad.rf, title)
+setkey(afinn.ksvm, title)
+setkey(nrc.ksvm, title)
+setkey(vad.ksvm, title)
+
+# a series of left-joins
+ensemble <- afinn.rf[ensemble]
+ensemble <- nrc.rf[ensemble]
+ensemble <- vad.rf[ensemble]
+ensemble <- afinn.ksvm[ensemble]
+ensemble <- nrc.ksvm[ensemble]
+ensemble <- vad.ksvm[ensemble]
+
+# We can look at the matrix we've created
+ensemble[, afinn.rf:vad.ksvm]
+
+e <- rowMeans(do.call(cbind, lapply(ensemble[, afinn.rf:vad.ksvm], as.logical)), na.rm = TRUE)
+
+e <- ensemble[
+  e > 0.5,
+  ensemble := "TRUE",
+][
+  e < 0.5,
+  ensemble := "FALSE",
+][
+  e == 0.5,
+  ensemble := sample(c("TRUE", "FALSE"), .N, replace = TRUE),
+]
+
+e[, ensemble := as.factor(ensemble)]
+
+confusionMatrix(e$ensemble, e$is_fake)
+#  86.8
