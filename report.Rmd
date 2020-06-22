@@ -292,13 +292,13 @@ We will also split the data into a training set to build our models with, and a 
 all.news <- lazy_dt(all.news) %>%
   mutate(
     title = str_trim(iconv(title, from = "utf8", to = "latin1")),
-    text = str_trim(iconv(text, from = "utf8", to = "latin1")),
-    title_caps = str_count(title, "[^a-z][A-Z]+[^a-z]")
+    text = str_trim(iconv(text, from = "utf8", to = "latin1"))
   ) %>%
-  filter(text != '' && title != '') %>%
+  filter(!is.na(title) & title != '') %>%
   mutate(
     full_text = paste(text, title),
-    is_fake = as.factor(is_fake)
+    is_fake = as.factor(is_fake),
+    title_caps = str_count(title, "[^a-z][A-Z]+[^a-z]")
   ) %>%
   select(title, full_text, is_fake, title_caps) %>%
   as.data.table()
