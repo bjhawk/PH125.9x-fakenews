@@ -143,11 +143,11 @@ vad <- vad[
   by = list(title, is_fake, is_cap_title, set)
 ]
 
-## Remove title from all sets, they're not needed anymore
-## and were only used as identifiers at this point
-afinn$title = NULL
-nrc$title = NULL
-vad$title = NULL
+# ## Remove title from all sets, they're not needed anymore
+# ## and were only used as identifiers at this point
+# afinn$title = NULL
+# nrc$title = NULL
+# vad$title = NULL
 
 ## Splitting test and training sets
 afinn <- split(afinn, by = "set", keep.by = FALSE)
@@ -166,60 +166,76 @@ remove(tokenized, afinn, nrc, vad)
 
 
 ## Begin building models
-## Random Forests
 
+# We can leveraging matrix-based function signatures for all the models we build
+# This helper function will create a matrix of all predictors from a given data.table
+makePredictors <- function(dt) {
+  # drop our title, used only as an identifier column
+  dt$title = NULL
+
+  # drop the response column
+  dt$is_fake = NULL
+
+  as.matrix(dt)
+
+  # # convert this bool factor into a -1/1 integer col
+  # is_cap_title = ifelse(dt$is_cap_title == TRUE, 1, -1)
+  # dt$is_cap_title = NULL
+  #
+  # # bind all the data together for return as a matrix
+  # cbind(
+  #   is_cap_title = is_cap_title,
+  #   as.matrix(dt)
+  # )
+}
+
+## Random Forests
 cl <- makeSOCKcluster(nThreads)
 registerDoSNOW(cl)
 
+rf.trainControl <- trainControl(
+  method = "cv",
+  number = 5,
+  allowParallel = TRUE
+)
+
 # RF AFINN
+message("RF Afinn")
 afinn.rf.model.timer <- proc.time()
 afinn.rf.model <- train(
-  is_fake ~ .,
-  data = afinn.training,
-  method = "parRF"
+  makePredictors(afinn.training),
+  afinn.training$is_fake,
+  method = "parRF",
+  trControl = rf.trainControl
 )
 afinn.rf.model.timer <- proc.time() - afinn.rf.model.timer
 
 # RF NRC
+message("RF NRC")
 nrc.rf.model.timer <- proc.time()
 nrc.rf.model <- train(
-  is_fake ~ .,
-  data = nrc.training,
-  method = "parRF"
+  makePredictors(nrc.training),
+  nrc.training$is_fake,
+  method = "parRF",
+  trControl = rf.trainControl
 )
 nrc.rf.model.timer <- proc.time() - nrc.rf.model.timer
 
 # RF VAD
+message("RF NRC VAD")
 vad.rf.model.timer <- proc.time()
 vad.rf.model <- train(
-  is_fake ~ .,
-  data = vad.training,
-  method = "parRF"
+  makePredictors(vad.training),
+  vad.training$is_fake,
+  method = "parRF",
+  trControl = rf.trainControl
 )
 vad.rf.model.timer <- proc.time() - vad.rf.model.timer
 
 ## Radial KSVMs
-##
-# We defualt to C= 1
+
+# We defualt to C = 1
 # as the max penalty for large residuals, since our dataset is relatively small
-
-# because we will be leveraging matrix-based function signatures,
-# this (highly customized) helper function will create a matrix
-# of all predictors from a given data.table
-makePredictors <- function(dt) {
-  # drop the response column
-  dt$is_fake = NULL
-
-  # convert this bool factor into a -1/1 integer col
-  is_cap_title = ifelse(dt$is_cap_title == TRUE, 1, -1)
-  dt$is_cap_title = NULL
-
-  # bind all the data together for return as a matrix
-  cbind(
-    is_cap_title = is_cap_title,
-    as.matrix(dt)
-  )
-}
 
 ksvm.trainControl <- trainControl(
   method = "cv",
@@ -228,6 +244,7 @@ ksvm.trainControl <- trainControl(
 )
 
 # KSVM AFINN
+message("KSVM Afinn")
 afinn.ksvm.model.timer <- proc.time()
 afinn.training.predictors <- makePredictors(afinn.training)
 
@@ -251,6 +268,7 @@ afinn.ksvm.model <- train(
 afinn.ksvm.model.timer <- proc.time() - afinn.ksvm.model.timer
 
 # KSVM NRC
+message("KSVM NRC")
 nrc.ksvm.model.timer <- proc.time()
 nrc.training.predictors <- makePredictors(nrc.training)
 
@@ -274,6 +292,7 @@ nrc.ksvm.model <- train(
 nrc.ksvm.model.timer <- proc.time() - nrc.ksvm.model.timer
 
 # KSVM VAD
+message("KSVM VAD")
 vad.ksvm.model.timer <- proc.time()
 vad.training.predictors <- makePredictors(vad.training)
 
@@ -301,5 +320,74 @@ stopCluster(cl)
 registerDoSEQ()
 remove(cl)
 
+## Accuracy measures against training datasets
+# Afinn RF
+confusionMatrix(fitted(afinn.rf.model), afinn.training$is_fake)
+# 74.9
+# 82.3
+
+# NRC RF
+confusionMatrix(fitted(nrc.rf.model), nrc.training$is_fake)
+# 99.2
+# 99.8
+
+# NRC VAD RF
+confusionMatrix(fitted(vad.rf.model), vad.training$is_fake)
+# 99.8
+# 99.8
+
+
+# Afinn SVM
+confusionMatrix(fitted(afinn.ksvm.model$finalModel), afinn.training$is_fake)
+# 74.8
+# 82
+
+# NRC SVM
+confusionMatrix(fitted(nrc.ksvm.model$finalModel), nrc.training$is_fake)
+# 83.6
+# 88.4
+
+# NRC VAD SVM
+confusionMatrix(fitted(vad.ksvm.model$finalModel), vad.training$is_fake)
+# 80.8
+# 86.2
 
 ## Make final predictions/measure Acc
+# Afinn RF
+confusionMatrix(predict(afinn.rf.model, afinn.testing), afinn.testing$is_fake)
+# 76.6
+# 81.9
+
+# NRC RF
+confusionMatrix(predict(nrc.rf.model, nrc.testing), nrc.testing$is_fake)
+# 84.3
+# 89
+
+# NRC VAD RF
+confusionMatrix(predict(vad.rf.model, vad.testing), vad.testing$is_fake)
+# 83.3
+# 87.2
+
+
+# Afinn SVM
+confusionMatrix(predict(afinn.ksvm.model, makePredictors(afinn.testing)), afinn.testing$is_fake)
+# 77
+# 82.3
+
+# NRC SVM
+confusionMatrix(predict(nrc.ksvm.model, makePredictors(nrc.testing)), nrc.testing$is_fake)
+# 80.7
+# 87.3
+
+# NRC VAD SVM
+confusionMatrix(predict(vad.ksvm.model, makePredictors(vad.testing)), vad.testing$is_fake)
+# 80.8
+# 86.1
+
+## Ensembles
+# training
+
+
+
+
+# testing
