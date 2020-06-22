@@ -9,7 +9,7 @@ bibliography: citations.bibtex
 csl: citation_style.csl
 ---
 
-```{r setup, include=FALSE}
+```{r setup, include=FALSE, warning = FALSE}
 if(!require(tidyr))
   install.packages("tidyr", repos = "http://cran.us.r-project.org")
 if(!require(dplyr))
@@ -459,7 +459,7 @@ Given the nature of our predictors being numeric and continuous, decision trees 
 
 I have implemented this here on a relatively powerful consumer PC, with a roughly 4Ghz processor running 16 threads.
 
-```{r build_rf_models}
+```{r build_rf_models, warning = FALSE}
 # We can leveraging matrix-based function signatures for all the models we build
 # This helper function will create a matrix of all predictors from a given data.table
 makePredictors <- function(dt) {
@@ -511,6 +511,11 @@ vad.rf.model <- train(
   method = "parRF",
   trControl = rf.trainControl
 )
+
+# Stop and de-register parallel computing
+stopCluster(cl)
+registerDoSEQ()
+remove(cl)
 ```
 
 Now that we've built our models, we can begin to measure their accuracy with the training data used to produce them. Obviously this will be overfit, however it does begin to show us whether or not these attempts were in anywhere near successful.
