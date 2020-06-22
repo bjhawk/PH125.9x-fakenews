@@ -1,0 +1,593 @@
+---
+title: "PH125.9x - Predicting \"Fake\" News using Support Vector Machines"
+author: "Brendan Hawk"
+date: "2020-06-01"
+output:
+  pdf_document:
+    keep_tex: true
+bibliography: citations.bibtex
+csl: citation_style.csl
+---
+
+```{r setup, include=FALSE}
+if(!require(tidyr))
+  install.packages("tidyr", repos = "http://cran.us.r-project.org")
+if(!require(dplyr))
+  install.packages("dplyr", repos = "http://cran.us.r-project.org")
+if(!require(data.table))
+  install.packages("data.table", repos = "http://cran.us.r-project.org")
+if(!require(dtplyr))
+  install.packages("dtplyr", repos = "http://cran.us.r-project.org")
+if(!require(stringr))
+  install.packages("stringr", repos = "http://cran.us.r-project.org")
+if(!require(caret))
+  install.packages("caret", repos = "http://cran.us.r-project.org")
+if(!require(ggplot2))
+  install.packages("ggplot2", repos = "http://cran.us.r-project.org")
+if(!require(lubridate))
+  install.packages("lubridate", repos = "http://cran.us.r-project.org")
+if(!require(tidytext))
+  install.packages("tidytext", repos = "http://cran.us.r-project.org")
+if(!require(doSNOW))
+  install.packages("doSNOW", repos = "http://cran.us.r-project.org")
+
+options(digits = 3)
+
+# For reproducibility, set the seed manually.
+set.seed(1989, sample.kind = "Rounding")
+
+# Set a base theme for all ggplot2 charts
+theme_set(theme_classic())
+```
+
+
+# Introduction
+
+## Overview
+
+According to a cursory search on Google Trends[^1], peak interest in the search term "Fake News" was reached in October of 2016. The same data reported from January of 2004 through September of 2016 shows a relative average interest of only 4.1%, while relative average interest since October of 2016 is 38%. While the concept of "real" vs "fake" news has certainly been as long-standing as the news itself, the buzz-word "Fake News" has brought it to new light in the public's eye.
+
+As the sheer amount of information increases day by day, differentiating the truthful media available to us from stories that are poorly sourced, exaggerated, or even outright falsified is more important than ever. Unfortunately, it is also more difficult than ever; individuals and organisations crafting disinformation are doing so using targeting techniques backed by huge amounts of data and advanced machine learning. Propaganda on a given subject can be aimed at and delivered to individuals that are already on the cusp of believing it, relying on their confirmation bias to reinforce loosely held opinions into firm beliefs.
+
+This same approach can be used to help distinguish such attacks from truer information. With the help of classifications from places like Politifact[^2] and other non-partisan, object fact-checking sources, we can begin to train machine learning algorithms to help us sort the deluge of news and pull out what's worth keeping and what can be rejected.
+
+The data used in this report comes from real-world news sources: Places like Reuters[^3] website for a source of verified news, and places flagged by Politifact and Wikipedia as unreliable news sources for a source of "fake" news. The majority of these articles are focused on US and World Politics. This dataset was sourced from its original collectors, at University of Victoria ISOT Research Lab[^4], where researches Ahmed, Traore, and Saad Published them in conference notes from the first ISDDC[@ahmedh.traorei.saads.2017] conference in 2017 as well as a subsequent paper in the Journal of Security and Privacy[@ahmedhtraoreisaads.2018].
+
+## Machine Learning Approaches
+
+To accomplish the goal of identifying "fake" news, we first need to train our machine learning algorithms to read. Modern day approaches to this involve a computational marvel called Natural Language Processing, where that goal is more literally applied. Here, we have taken a more rudimentary approach and applied a technique called Sentiment Analysis. This technique involves breaking down parts of the text at hand into _tokens_, then associating each token with some metric of sentiment. For example, the token "foolish" is given a simple negative sentiment score of -2, or the token "sage" is attributed to multiple sentiments of "positive" and "trust". These associations are introduced to the data through _lexicons_: dictionaries of correlations between words in a given language and sentiments associated with them.
+
+## Lexicons
+
+Lexicons are the foundation of Sentiment Analysis, and are a great labour to produce. All three of the lexicons used in the following analysis were produced using some form of crowdsourcing, where respondents were asked to make these associations to given words using a provided scale or set of options. They each use a different form of association, and have all provided differing results when used in analysis. 
+
+#### Afinn
+
+The Afinn Sentiment Lexicon[@DBLP:journals/corr/abs-1103-2903] presents a single scale of values to measure sentiment. This scale ranges from -5 to 5 and is rated in integers. This lexicon has associations for 2477 tokens.
+
+#### NRC
+
+The NRC Word-Emotion Association Lexicon[@mohammad13] presents each token with one or more associated emotions. This is a combination of the two sentiments "negative" and "positive", and eight emotions: "anger", "anticipation", "disgust", "fear", "joy", "sadness", "surprise", and "trust". This lexicon is considerably larger than the Afinn lexicon, with associations for 6468 tokens.
+
+#### NRC VAD
+
+The NRC Valence, Arousal, and Dominance Lexicon[@vad-acl2018] is a creative application of influential factor analysis and Best-Worst scoring to compute a score for each token on three different dimensions. The "valence" dimension is positive-negative or pleasure-displeasure scale The "arousal" dimension is a descriptor of the excited-calm or active-passive sentiment. The "dominance" dimensions shows the powerful-weak sentiment. Each dimensional score is provided a as decimal value ranging from 0 to 1. This makes it the most fine-grained lexicon. It is also the largest, with sentiment associations for all three dimensions associated with 20,007 tokens.
+
+[^1]: https://trends.google.com/trends/explore?date=2004-01-01%202020-01-01&geo=US&q=fake%20news
+[^2]: https://www.politifact.com/
+[^3]: https://www.reuters.com
+[^4]: https://www.uvic.ca/engineering/ece/isot/
+
+\pagebreak
+
+# Analysis
+
+## The Data
+
+The Fake News Dataset from Ahmed _et al_ comes in the form of two csv files: Fake.csv and True.csv. To begin our analysis we can read these into a single dataset and assign a new column differentiating the rows:
+
+```{r read_data}
+# Read True.csv into memory
+real.news <- fread(file.path("data", "True.csv"))
+# Assign a new column denoting this is NOT "fake" news
+real.news[, is_fake := FALSE]
+
+# Read Fake.csv into memory
+fake.news <- fread(file.path("data", "Fake.csv"))
+# Assign a new column denoting this is "fake" news
+fake.news[, is_fake := TRUE]
+
+# Combine the tables
+all.news <- rbind(real.news, fake.news)
+
+# Remove intermediary objects
+remove(real.news, fake.news)
+```
+
+Immediately on perusing the dataset, we can see that the sources have some shoddy character encoding. Reading down the list of titles, there are noticeable issues such as apostrophes mis-encoded as `â€™`, and a few examples of a special form of double quote shown as `“`. It is easiest to deal with this up front, and re-encode everything into the same standard. We can also trim out leading and trailing whitespace from our titles and texts at the same time.
+
+```{r fix_encoding}
+all.news[, `:=`(
+    title = str_trim(iconv(title, from = "utf8", to = "latin1")),
+    text = str_trim(iconv(text, from = "utf8", to = "latin1"))
+)]
+```
+
+We should also inspect for missing data.
+
+```{r missing_data}
+# Empty title cells
+all.news[is.na(title) | title == "", .N]
+
+# Empty text cells
+all.news[is.na(text) | text == "", .N]
+
+# Empty text cells aggregated by is_fake
+all.news[
+  is.na(text) | text == ""
+][
+  ,
+  .N,
+  by = is_fake
+]
+```
+
+We can see that there are missing data. 9 Titles are empty, as well as 630 "fake" and 21 "real" news texts. In the final analysis, we combine these two into a single text column to parse, so as long as we at least have a title we can continue with a given observation.
+
+```{r remove_missing_titles}
+all.news <- all.news[!is.na(title) & title != ""]
+```
+
+## Exploration
+
+Knowing the source of the data, I was aware that there were some built-in biases. The most glaring of these is easily seen when scanning through texts from the True.csv file: almost all of them mention or lead in with the word "Reuters".
+
+```{r prevalence_of_reuters}
+# Create a column showing whether or not the word "Reuters" is in the text
+all.news[, has_reuters := grepl("reuters", text, ignore.case = TRUE)]
+
+# Summarize this column disaggregated by is_fake
+all.news[, .N, by = list(has_reuters, is_fake)]
+```
+
+This phenomenon is so prevalent, in fact, that if this were the foundation of our approach, we would already be finished with our analysis. If we simply guessed "If the article does _not_ mention Reuters, then it must be fake news." we can achieve an unreasonable accuracy.
+
+```{r guess_reuters}
+reuters.guess <- data.table(
+    prediction = as.factor(!all.news$has_reuters),
+    observation = as.factor(all.news$is_fake)
+)
+
+table(reuters.guess$prediction, reuters.guess$observation)
+```
+
+This accuracy being greater than 99% is an obvious pitfall, however none of the lexicons used in the sentiment analysis below contain the word "Reuters" in any form. This will naturally preclude this from confounding our results later.
+
+```{r, remove_reuters_columns, echo=FALSE, results="hide"}
+# remove the reuters column and prediction object
+all.news$has_reuters = NULL
+
+remove(reuters.guess)
+```
+
+Further scanning of the data reveals that some articles have a preponderance of capitalized words, while others use only proper casing. We can count the number of whole words that are entirely capitalized, and visualize this on a plot. We will normalize the values within the realms of fake and true news, so that we can see if there is a differing correlation.
+
+```{r visualize_capitalized_word_counts}
+# Join the title and text of each observation into a column called full_text
+all.news[, full_text := paste(title, text, sep = " ")]
+
+# Count occurrences of whole words that are capitalized in each full_text
+all.news[, cap_words := str_count(full_text, "[^a-z][A-Z]+[^a-z]")]
+
+# normalize both sets of data separately, then plot
+all.news[
+  is_fake == TRUE,
+  cap_words.normalized := (cap_words - mean(cap_words))/sd(cap_words)
+][
+  is_fake == FALSE,
+  cap_words.normalized := (cap_words - mean(cap_words))/sd(cap_words)
+]
+
+# plot
+all.news %>%
+  ggplot(aes(x = cap_words.normalized, fill = is_fake)) +
+  geom_density(alpha = 0.3)
+```
+
+There certainly seems to be a noticeable difference in magnitude between these two, however their shape is incredibly similar. We can also perform the same exploration using just the titles.
+
+```{r visualize_capitalized_word_counts_just_title}
+# Count occurrences of whole words that are capitalized in just the title
+all.news[, cap_words := str_count(title, "[^a-z][A-Z]+[^a-z]")]
+
+# normalize both sets of data separately, then plot
+all.news[
+  is_fake == TRUE,
+  cap_words.normalized := (cap_words - mean(cap_words))/sd(cap_words)
+][
+  is_fake == FALSE,
+  cap_words.normalized := (cap_words - mean(cap_words))/sd(cap_words)
+]
+
+# plot
+all.news %>%
+  ggplot(aes(x = cap_words.normalized, fill = is_fake)) +
+  geom_density(alpha = 0.3)
+```
+
+Perhaps due to titles being fewer words by a large margin, we end up with some strange divergent density plots. We will hold on to this idea, and use a count of capitalized words in the title as one of our predictors.
+
+\pagebreak
+
+These data sources also came with a column of subjects. However it is clearly evident that there is another built-in bias here; the subjects found in the `Fake.csv` data are not found in the `True.csv` data and vice versa.
+
+```{r explore_subjects_bias}
+# Viewing all Subjects
+all.news[, .N, by = subject]
+
+# Viewing subjects disaggregated by is_fake
+all.news[, .N, by = list(subject, is_fake)]
+```
+
+Lastly, each observation comes with a date stamp of some form. The majority of this data is from 2016-2018, but as we will see the spread of dates is not even. This step produces a warning about several dates failing to parse. Inspecting these failures (not shown here) reveals that 35 observations use a different date format, and 10 observations have URLs listed in the date column. If we are to use this data later, we would have to consistently impute these. Many of the URLs have dates in them, and could be corrected by hand, however after this point in exploration the date column is not leveraged in the following analysis.
+
+\pagebreak
+
+```{r parse_and_explore_dates, warning = FALSE}
+# Parse the date in an R date object
+all.news[, parsed_date := mdy(date)]
+
+# plot counts over time
+all.news[, .N, by = .(is_fake, date = date(parsed_date))] %>%
+  ggplot(aes(x = date, y = N, fill = is_fake)) +
+  stat_smooth(
+    geom = 'area',
+    span = 0.25,
+    alpha = 0.5,
+    method = 'loess',
+    position = "stack"
+  )
+```
+
+\pagebreak
+
+## Approaches and Models
+
+```{r reset_fresh_data, echo=FALSE, results="hide'"}
+real.news <- fread(file.path('./data', 'True.csv'))
+real.news[, is_fake := FALSE]
+
+fake.news <- fread(file.path('./data', 'Fake.csv'))
+fake.news[, is_fake := TRUE]
+
+all.news <- rbind(real.news, fake.news)
+
+remove(real.news, fake.news)
+```
+
+#### Data Preparation
+
+To begin our analysis, we will need to clean the data, tokenize the texts, bind the tokens to their respective sentiments in each of the three lexicons, and finally accumulate the resulting sentiments for each article.
+
+Tokenization for this dataset will occur effectively per word. Commonly, more in-depth analysis utilize tokenization by `ngrams` or sets of n words. Commonly this takes the shape of bigrams ie pairs of words, allowing a difference to be detected between tokens such as "successful" and a matching but inverse sentiment from the bigram "not successful".
+
+Another important cleaning step is applied to the tokenized values: removal of stop words. Stop words, such as "and", "is", and "so". These words do not add meaningful sentiment to analyse and are thusly removed.
+
+It is also important to note that merging tokens with a sentiment set is done with `inner_join`, which inherently will reduce the size of the tokenized data list to only rows where there is a matching sentiment for that token in the lexicon. It is for this reason that the size of a lexicon is an important factor when choosing one for an analysis.
+
+We will also split the data into a training set to build our models with, and a test set to verify the models' final accuracy.
+
+```{r clean_dataset_for_analysis}
+# Clean and tidy dataset
+all.news <- lazy_dt(all.news) %>%
+  mutate(
+    title = str_trim(iconv(title, from = "utf8", to = "latin1")),
+    text = str_trim(iconv(text, from = "utf8", to = "latin1")),
+    title_caps = str_count(title, "[^a-z][A-Z]+[^a-z]")
+  ) %>%
+  filter(text != '' && title != '') %>%
+  mutate(
+    full_text = paste(text, title),
+    is_fake = as.factor(is_fake)
+  ) %>%
+  select(title, full_text, is_fake, title_caps) %>%
+  as.data.table()
+
+# Mark training and test datasets.
+train.index <- createDataPartition(
+  all.news$is_fake,
+  p = 0.8,
+  times = 1,
+  list = FALSE
+)
+
+all.news$set <- "testing"
+all.news[train.index, set := "training"]
+
+remove(train.index)
+
+# split tokens for joining sentiment, remove stop words.
+# This takes a few moments
+tokenized <- all.news %>%
+  unnest_tokens(token, full_text) %>%
+  lazy_dt() %>%
+  anti_join(data.table(token = stop_words$word), by = "token") %>%
+  as.data.table()
+```
+
+Now we will join each of the three lexicons to these tokens separately. Each lexicon provides a different measure of sentiment, and so will need differing aggregation.
+
+The Affin lexicon provides an integer column, and can simply be summed.
+
+```{r join_afinn_lexicon}
+# Read the data from file
+afinn <- fread("./data/afinn.csv")
+
+# Change names of columns for joining
+# using as_tibble > inner join > as.data.table due to discrepencies
+# in how joins are implemented in the data.table dtplyr backend
+setnames(afinn, c("token", "sentiment"))
+afinn <- as_tibble(tokenized) %>%
+  inner_join(afinn, by = "token") %>%
+  as.data.table()
+
+# aggregate total sentiment for each article
+afinn <- afinn[
+  ,
+  list(sentiment = sum(sentiment)),
+  by  = list(title, is_fake, title_caps, set)
+]
+```
+
+The NRC lexicon is far more work to aggregate. First, we join the tokens to the dataset, which filters the data to only those words that exist in the NRC lexicon. This same join, however, multiplies many of the rows by however many sentiments are attached to that token. When we aggregate them, we first need to make an intermediary process to spread these multiple rows into columns, showing whether or not a given token has any of the attached sentiments. Then, we can aggregate these into per-article totals.
+
+```{r join_nrc_lexicon}
+nrc <- fread("./data/nrc.csv")
+
+setnames(nrc, "word", "token")
+setkey(nrc, token)
+setkey(tokenized, token)
+
+nrc <- as_tibble(tokenized) %>%
+  inner_join(nrc, by = "token") %>%
+  as.data.table()
+
+# Tibbles with pivot_wider is a much easier-to-read approach here.
+# but there are other more performant ways of doing this if our
+# dataset was very large.
+nrc <- as_tibble(nrc) %>%
+  pivot_wider(
+    names_from = sentiment,
+    values_from = sentiment,
+    values_fn = list(sentiment = length),
+    values_fill = list(sentiment = 0)
+  )
+
+# View the wide output of this table
+head(nrc, 3)
+  
+# Roll up counts of all sentiments for all tokens for each article, ie Anger: 5, Joy 0, Negative: 3
+nrc <- nrc %>%
+  group_by(title, is_fake, title_caps, set) %>%
+  summarize_at(vars(-token), list(sum)) %>%
+  as.data.table()
+
+head(nrc, 3)
+```
+
+Finally, the NRC VAD lexicon is aggregated like the Afinn lexicon, but with a column aggregated for each dimension.
+
+```{r join_vad_lexicon}
+# Read the NRC VAD data from file
+vad <- fread("./data/nrc_vad.csv")
+
+# This lexicon comes with Title-cased columns
+setnames(vad, tolower(names(vad)))
+
+# change this column name for joining
+setnames(vad, "word", "token")
+
+setkey(vad, token)
+setkey(tokenized, token)
+
+# Join VAD data to tokens
+vad <- as_tibble(tokenized) %>%
+  inner_join(vad, by = "token") %>%
+  as.data.table()
+
+# Sum VAD dimensions
+vad <- vad[
+  ,
+  list(
+    valence = sum(valence),
+    arousal = sum(arousal),
+    dominance = sum(dominance)
+  ),
+  by = list(title, is_fake, title_caps, set)
+]
+```
+
+We can now separate the test and training sets. Because the above data preparation relies so heavily on merges, the data sets were kept together for easier processing. Here we will separate them and remove the training/testing identifier.
+
+```{r split_training_testing_data}
+afinn <- split(afinn, by = "set", keep.by = FALSE)
+afinn.training <- afinn$training
+afinn.testing <- afinn$testing
+
+nrc <- split(nrc, by = "set", keep.by = FALSE)
+nrc.training <- nrc$training
+nrc.testing <- nrc$testing
+
+vad <- split(vad, by = "set", keep.by = FALSE)
+vad.training <- vad$training
+vad.testing <- vad$testing
+
+# clean up unneded objects
+remove(tokenized, afinn, nrc, vad)
+```
+
+#### Naive Baseline
+
+It is always instructive to use the most naive approach as a baseline. Here, we can summarize our intended inference by effectively tossing a coin and guessing accordingly. Given an approximately normal distribution of binary categorical outcomes in the observed data, we can predict that this would be correct approximately half of the time. As we see here, this holds true and we achieve exactly 50% accuracy.
+
+```{r naive_baseline}
+# Replicate the naive approach 10000 times
+mean(replicate(10000, {
+  # Guess True or False for is_fake randomly
+  predictions <- sample(c(TRUE, FALSE), nrow(all.news), replace = TRUE)
+  
+  # Return the accuracy of this replication
+  mean(predictions == all.news$is_fake)
+}))
+```
+
+#### Random Forests
+
+Given the nature of our predictors being numeric and continuous, decision trees are a very common approach to classification algorithms. We will create and train a model for each set of data bound to the three sentiment lexicons. Here, this analysis is accomplished more quickly using `parRF`, a parallelized implementation of Random Forests. The `caret` training method for this package only has one tuning parameter, `mtry`, and for data this small I have found the defaults work well enough.
+
+I have implemented this here on a relatively powerful consumer PC, with a roughly 4Ghz processor running 16 threads.
+
+```{r build_rf_models, eval=FALSE}
+# Start and register parallel threads
+# NB: Never set this number higher than your computer
+# can handle!   
+nThreads <- 16
+cl <- makeSOCKcluster(nThreads)
+registerDoSNOW(cl)
+
+# A `caret` trainControl object, using parallized
+# 5-fold cross-validation.
+rf.trainControl <- trainControl(
+  method = "cv",
+  number = 5,
+  allowParallel = TRUE
+)
+
+# RF model for Afinn sentiments
+afinn.rf.model <- train(
+  makePredictors(afinn.training),
+  afinn.training$is_fake,
+  method = "parRF",
+  trControl = rf.trainControl
+)
+
+# RF NRC
+nrc.rf.model <- train(
+  makePredictors(nrc.training),
+  nrc.training$is_fake,
+  method = "parRF",
+  trControl = rf.trainControl
+)
+
+# RF VAD
+vad.rf.model <- train(
+  makePredictors(vad.training),
+  vad.training$is_fake,
+  method = "parRF",
+  trControl = rf.trainControl
+)
+```
+
+Now that we've built our models, we can begin to measure their accuracy with the training data used to produce them. Obviously this will be overfit, however it does begin to show us whether or not these attempts were in anywhere near successful.
+
+```{r test_rf_models_training, eval=FALSE}
+## Accuracy measures against training datasets
+# Afinn RF
+confusionMatrix(fitted(afinn.rf.model), afinn.training$is_fake)
+# 82.3
+
+# NRC RF
+confusionMatrix(fitted(nrc.rf.model), nrc.training$is_fake)
+# 99.8
+
+# NRC VAD RF
+confusionMatrix(fitted(vad.rf.model), vad.training$is_fake)
+# 99.8
+```
+
+#### Support Vector Machines
+
+> explain what an svm is and what it does
+
+> demonstrate on dummy data
+
+> make models
+
+> test models on training sets
+
+```{r, test_svm_models_training, eval=FALSE}
+# Afinn SVM
+confusionMatrix(fitted(afinn.ksvm.model$finalModel), afinn.training$is_fake)
+# 82
+
+# NRC SVM
+confusionMatrix(fitted(nrc.ksvm.model$finalModel), nrc.training$is_fake)
+# 88.4
+
+# NRC VAD SVM
+confusionMatrix(fitted(vad.ksvm.model$finalModel), vad.training$is_fake)
+# 86.2
+```
+
+#### Ensemble Model?
+
+>  ?
+
+\pagebreak
+
+
+# Results
+
+> a results section that presents the modeling results and discusses the model performance; and
+
+#### Random Forests
+
+```{r test_rf_models_testing, eval=FALSE}
+## Make final predictions/measure Acc
+# Afinn RF
+confusionMatrix(predict(afinn.rf.model, afinn.testing), afinn.testing$is_fake)
+# 81.9
+
+# NRC RF
+confusionMatrix(predict(nrc.rf.model, nrc.testing), nrc.testing$is_fake)
+# 89
+
+# NRC VAD RF
+confusionMatrix(predict(vad.rf.model, vad.testing), vad.testing$is_fake)
+# 87.2
+```
+
+#### Support Vector Machines
+
+```{r test_svm_models_testing, eval=FALSE}
+# Afinn SVM
+confusionMatrix(predict(afinn.ksvm.model, makePredictors(afinn.testing)), afinn.testing$is_fake)
+# 82.3
+
+# NRC SVM
+confusionMatrix(predict(nrc.ksvm.model, makePredictors(nrc.testing)), nrc.testing$is_fake)
+# 87.3
+
+# NRC VAD SVM
+confusionMatrix(predict(vad.ksvm.model, makePredictors(vad.testing)), vad.testing$is_fake)
+# 86.1
+```
+
+#### Ensemble Model
+
+> ?
+
+\pagebreak
+
+
+# Conclusion
+
+> a conclusion section that gives a brief summary of the report, its potential impact, its limitations, and future work.
+
+
+
+
+***
+
+# Citations
+

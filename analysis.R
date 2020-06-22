@@ -57,19 +57,18 @@ all.news[train.index, set := "training"]
 
 remove(train.index)
 
+message("Splitting tokens")
 # This takes a few moments
-tokenize.timer <- proc.time()
+timer <- proc.time()
 # split tokens for joining sentiment, remove stop words.
 tokenized <- all.news %>%
   unnest_tokens(token, full_text) %>%
   lazy_dt() %>%
   anti_join(data.table(token = stop_words$word), by = "token") %>%
   as.data.table()
-
-tokenize.timer <- tokenize.timer - proc.time()
+message("Tokens split in ", timer - proc.time(), " seconds.")
 
 remove(all.news)
-
 
 message("joining dataset to sentiments")
 
@@ -77,6 +76,7 @@ message("joining dataset to sentiments")
 ## not present in the given lexicon
 
 message(". . . Afinn")
+timer <- proc.time()
 afinn <- fread("./data/afinn.csv")
 
 # Change names of columns for joining
@@ -94,7 +94,10 @@ afinn <- afinn[
   by  = list(title, is_fake, title_caps, set)
 ]
 
+message("Afinn sentiment aggregated in ", timer - proc.time(), " seconds.")
+
 message(". . . NRC")
+timer <- proc.time()
 nrc <- fread("./data/nrc.csv")
 
 setnames(nrc, "word", "token")
@@ -119,8 +122,10 @@ nrc <- as_tibble(nrc) %>%
   summarize_at(vars(-token), list(sum)) %>%
   as.data.table()
 
+message("NRC sentiment aggregated in ", timer - proc.time(), " seconds.")
 
 message(". . . NRC VAD")
+timer <- proc.time()
 vad <- fread("./data/nrc_vad.csv")
 setnames(vad, tolower(names(vad)))
 setnames(vad, "word", "token")
@@ -141,6 +146,7 @@ vad <- vad[
   ),
   by = list(title, is_fake, title_caps, set)
 ]
+message("NRC sentiment aggregated in ", timer - proc.time(), " seconds.")
 
 ## Splitting test and training sets
 afinn <- split(afinn, by = "set", keep.by = FALSE)
@@ -183,36 +189,36 @@ rf.trainControl <- trainControl(
 
 # RF AFINN
 message("RF Afinn")
-afinn.rf.model.timer <- proc.time()
+timer <- proc.time()
 afinn.rf.model <- train(
   makePredictors(afinn.training),
   afinn.training$is_fake,
   method = "parRF",
   trControl = rf.trainControl
 )
-afinn.rf.model.timer <- proc.time() - afinn.rf.model.timer
+message("Afinn Random Forest built in ", timer - proc.time(), " seconds.")
 
 # RF NRC
 message("RF NRC")
-nrc.rf.model.timer <- proc.time()
+timer <- proc.time()
 nrc.rf.model <- train(
   makePredictors(nrc.training),
   nrc.training$is_fake,
   method = "parRF",
   trControl = rf.trainControl
 )
-nrc.rf.model.timer <- proc.time() - nrc.rf.model.timer
+message("NRC Random Forest built in ", timer - proc.time(), " seconds.")
 
 # RF VAD
 message("RF NRC VAD")
-vad.rf.model.timer <- proc.time()
+timer <- proc.time()
 vad.rf.model <- train(
   makePredictors(vad.training),
   vad.training$is_fake,
   method = "parRF",
   trControl = rf.trainControl
 )
-vad.rf.model.timer <- proc.time() - vad.rf.model.timer
+message("NRC VAD Random Forest built in ", timer - proc.time(), " seconds.")
 
 ## Radial KSVMs
 
@@ -227,7 +233,7 @@ ksvm.trainControl <- trainControl(
 
 # KSVM AFINN
 message("KSVM Afinn")
-afinn.ksvm.model.timer <- proc.time()
+timer <- proc.time()
 afinn.training.predictors <- makePredictors(afinn.training)
 
 afinn.training.sigmas <- sigest(afinn.training.predictors, frac = 1)
@@ -247,11 +253,11 @@ afinn.ksvm.model <- train(
     C = 1
   )
 )
-afinn.ksvm.model.timer <- proc.time() - afinn.ksvm.model.timer
+message("Afinn SVM model built in ", timer - proc.time(), " seconds.")
 
 # KSVM NRC
 message("KSVM NRC")
-nrc.ksvm.model.timer <- proc.time()
+timer <- proc.time()
 nrc.training.predictors <- makePredictors(nrc.training)
 
 nrc.training.sigmas <- sigest(nrc.training.predictors, frac = 1)
@@ -271,11 +277,11 @@ nrc.ksvm.model <- train(
     C = 1
   )
 )
-nrc.ksvm.model.timer <- proc.time() - nrc.ksvm.model.timer
+message("NRC SVM model built in ", timer - proc.time(), " seconds.")
 
 # KSVM VAD
 message("KSVM VAD")
-vad.ksvm.model.timer <- proc.time()
+timer <- proc.time()
 vad.training.predictors <- makePredictors(vad.training)
 
 vad.training.sigmas <- sigest(vad.training.predictors, frac = 1)
@@ -295,7 +301,7 @@ vad.ksvm.model <- train(
     C = 1
   )
 )
-vad.ksvm.model.timer <- proc.time() - vad.ksvm.model.timer
+message("NRC VAD SVM model built in ", timer - proc.time(), " seconds.")
 
 ## Stop and deregister parallel computing
 stopCluster(cl)
@@ -368,8 +374,5 @@ confusionMatrix(predict(vad.ksvm.model, makePredictors(vad.testing)), vad.testin
 
 ## Ensembles
 # training
-
-
-
 
 # testing
