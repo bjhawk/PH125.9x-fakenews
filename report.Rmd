@@ -1,5 +1,5 @@
 ---
-title: "PH125.9x - Predicting \"Fake\" News using Support Vector Machines"
+title: "PH125.9x - Predicting \"Fake\" News using Machine Learning"
 author: "Brendan Hawk"
 date: "2020-06-01"
 output:
@@ -524,11 +524,11 @@ Now that we've built our models, we can begin to measure their accuracy with the
 ## Accuracy measures against training datasets
 # Afinn RF
 confusionMatrix(fitted(afinn.rf.model), afinn.training$is_fake)
-# 82.3%
+# 82.2%
 
 # NRC RF
 confusionMatrix(fitted(nrc.rf.model), nrc.training$is_fake)
-# 99.8%
+# 99.7%
 
 # NRC VAD RF
 confusionMatrix(fitted(vad.rf.model), vad.training$is_fake)
@@ -572,7 +572,7 @@ ksvm.predictions <- predict(
   as.matrix(nrc.training[, .(joy, disgust)])
 )
 confusionMatrix(ksvm.predictions, nrc.training$is_fake)
-# 60.5%
+# 62.3%
 ```
 
 With this little data, and only two dimensions, it is unsurprising that the accuracy of this model is not great. We can show the boundaries drawn by this model in a similar scatterplot.
@@ -682,15 +682,15 @@ Now with our models built, we can check the accuracy achieved with the training 
 ```{r, test_svm_models_training}
 # Afinn SVM
 confusionMatrix(fitted(afinn.ksvm.model$finalModel), afinn.training$is_fake)
-# 82%
+# 81.9%
 
 # NRC SVM
 confusionMatrix(fitted(nrc.ksvm.model$finalModel), nrc.training$is_fake)
-# 88.4%
+# 89%
 
 # NRC VAD SVM
 confusionMatrix(fitted(vad.ksvm.model$finalModel), vad.training$is_fake)
-# 86.2%
+# 86.1%
 ```
 
 These accuracies are not as good as the RF models above, which truthfully surprised me. That said, it's possible that these accuracies are more consistent and will hold out better when using the testing set later.
@@ -801,7 +801,7 @@ ensemble[, ensemble := as.factor(ensemble)]
 
 # See the results
 confusionMatrix(ensemble$ensemble, ensemble$is_fake)
-# 90.8%
+# 90.6%
 ```
 
 Understandably, the ensemble model is about as accurate as the mean of the individual accuracies for our 6 models. It will remain to be seen if this continues to be as consistently accurate when applied to our testing dataset
@@ -818,15 +818,15 @@ The results for our Random Forest models suffer against the testing set when com
 ## Make final predictions/measure Acc
 # Afinn RF
 confusionMatrix(predict(afinn.rf.model, afinn.testing), afinn.testing$is_fake)
-# 81.9%
+# 82.3%
 
 # NRC RF
 confusionMatrix(predict(nrc.rf.model, nrc.testing), nrc.testing$is_fake)
-# 89%
+# 89.6%
 
 # NRC VAD RF
 confusionMatrix(predict(vad.rf.model, vad.testing), vad.testing$is_fake)
-# 87.2%
+# 87.7%
 ```
 
 #### Support Vector Machines
@@ -836,15 +836,15 @@ The KSVM model results predicting against the training set are far closer to the
 ```{r test_svm_models_testing}
 # Afinn SVM
 confusionMatrix(predict(afinn.ksvm.model, makePredictors(afinn.testing)), afinn.testing$is_fake)
-# 82.3%
+# 82.2%
 
 # NRC SVM
 confusionMatrix(predict(nrc.ksvm.model, makePredictors(nrc.testing)), nrc.testing$is_fake)
-# 87.3%
+# 87.7%
 
 # NRC VAD SVM
 confusionMatrix(predict(vad.ksvm.model, makePredictors(vad.testing)), vad.testing$is_fake)
-# 86.1%
+# 86.6%
 ```
 
 #### Ensemble Model
@@ -952,7 +952,7 @@ ensemble[, ensemble := as.factor(ensemble)]
 
 # See the results
 confusionMatrix(ensemble$ensemble, ensemble$is_fake)
-#  86.8
+#  87.1
 ```
 
 \pagebreak
